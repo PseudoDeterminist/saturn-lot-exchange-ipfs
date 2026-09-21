@@ -31,7 +31,7 @@ const ERC20_ABI = [
   "function symbol() view returns (string)"
 ];
 
-const NONE = -(2n ** 255n);
+const NONE = -(2n ** 31n);
 
 const el = {
   statusPill: document.getElementById("status-pill"),
@@ -258,8 +258,13 @@ async function copyAddresses() {
 }
 
 async function initProvider() {
-  state.readProvider = new ethers.JsonRpcProvider(RPC_URL);
-  if (window.ethereum) {
+state.readProvider = new ethers.JsonRpcProvider(
+  RPC_URL,
+  undefined,
+  { batchMaxCount: 1 }
+);
+
+if (window.ethereum) {
     state.walletProvider = new ethers.BrowserProvider(window.ethereum);
   }
   state.readContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, state.readProvider);
