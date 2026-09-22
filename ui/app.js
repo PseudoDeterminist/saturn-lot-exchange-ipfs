@@ -84,7 +84,9 @@ const el = {
   addWetc: document.getElementById("add-wetc"),
   brandSub: document.getElementById("brand-sub"),
   pairTag: document.getElementById("pair-tag"),
-  addLotToken: document.getElementById("add-lot-token"),  ticketStatus: document.getElementById("ticket-status"),
+  marketMenu: document.getElementById("market-menu"),
+  addLotToken: document.getElementById("add-lot-token"),
+  ticketStatus: document.getElementById("ticket-status"),
 };
 
 const state = {
@@ -100,6 +102,7 @@ const state = {
   lotToken: null,
 
   marketId: DEFAULT_MARKET_ID,
+  markets: [],
   lotTokenAddress: null,
   lotTokenSymbol: null,
   lotTokenDecimals: null,
@@ -335,6 +338,96 @@ async function initProvider() {
   state.readSource = "wallet";
 }
 
+async function discoverMarkets() {
+  const count = Number(await state.readContract.marketCount());
+  const markets = [];
+
+  for (let marketId = 1; marketId <= count; marketId += 1) {
+    const market = await state.readContract.getMarket(marketId);
+
+    if (!market.exists) continue;
+
+    const token = new ethers.Contract(
+      market.lotToken,
+      ERC20_ABI,
+      state.readProvider,
+    );
+
+    let symbol = `Market ${marketId}`;
+
+    try {
+      symbol = await token.symbol();
+    } catch (err) {
+      console.warn(`Could not read symbol for market ${marketId}:`, err);
+    }
+
+    markets.push({
+      marketId,
+      lotTokenAddress: market.lotToken,
+      symbol,
+      active: market.active,
+    });
+  }
+
+  state.markets = markets;
+  renderMarketMenu();
+}
+
+function renderMarketMenu() {
+  if (!el.marketMenu) return;
+
+  const quoteSymbol = config.quoteSymbol || "WETC";
+
+  el.marketMenu.innerHTML = state.markets
+    .map((market) => {
+      const active = market.marketId === state.marketId ? " active" : "";
+
+      const status = market.active ? "" : " · paused";
+
+      return `
+        <button
+          class="market-option${active}"
+          type="button"
+          data-market-id="${market.marketId}"
+        >
+          ${market.symbol} / ${quoteSymbol}${status}
+          <span class="market-option-id">#${market.marketId}</span>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+async function selectMarket(marketId) {
+  if (marketId === state.marketId) {
+    el.marketMenu.hidden = true;
+    return;
+  }
+
+  try {
+    el.marketMenu.hidden = true;
+
+    setTicketStatus(`Loading market ${marketId}...`);
+
+    state.lastTradeTick = null;
+    state.lastTradeBlock = null;
+    state.tape = [];
+
+    await loadMarket(marketId);
+
+    renderMarketMenu();
+    renderTape();
+
+    setTicketStatus(
+      `${state.lotTokenSymbol} / ${config.quoteSymbol || "WETC"} loaded.`,
+    );
+
+    await refresh();
+  } catch (err) {
+    setTicketStatus(`Market load failed: ${errorMessage(err)}`);
+  }
+}
+
 async function loadMarket(marketId) {
   const market = await state.readContract.getMarket(marketId);
 
@@ -363,15 +456,15 @@ async function loadMarket(marketId) {
 
   const quoteSymbol = config.quoteSymbol || "WETC";
   const pairLabel = `${state.lotTokenSymbol} / ${quoteSymbol}`;
-  
+
   if (el.brandSub) {
     el.brandSub.textContent = `${pairLabel} - CLOB`;
   }
-  
+
   if (el.pairTag) {
-    el.pairTag.textContent = pairLabel;
+    el.pairTag.textContent = `${pairLabel} ▾`;
   }
-  
+
   if (el.addLotToken) {
     el.addLotToken.textContent = `Add ${state.lotTokenSymbol}`;
   }
@@ -951,8 +1044,8 @@ function bindEvents() {
       addTokenToWallet(
         state.lotTokenAddress,
         state.lotTokenSymbol || "LOT",
-        state.lotTokenDecimals ?? 0
-      )
+        state.lotTokenDecimals ?? 0,
+      ),
     );
   }
   el.refreshBtn.addEventListener("click", refresh);
@@ -993,6 +1086,28 @@ function bindEvents() {
       setDepth(value);
     });
   }
+
+  if (el.pairTag && el.marketMenu) {
+    el.pairTag.addEventListener("click", (event) => {
+      event.stopPropagation();
+      el.marketMenu.hidden = !el.marketMenu.hidden;
+    });
+
+    el.marketMenu.addEventListener("click", (event) => {
+      const option = event.target.closest("[data-market-id]");
+      if (!option) return;
+
+      const marketId = Number(option.dataset.marketId);
+
+      if (Number.isFinite(marketId)) {
+        selectMarket(marketId);
+      }
+    });
+
+    document.addEventListener("click", () => {
+      el.marketMenu.hidden = true;
+    });
+  }
 }
 
 async function waitForExpectedChain(timeoutMs = 5000) {
@@ -1000,7 +1115,7 @@ async function waitForExpectedChain(timeoutMs = 5000) {
 
   while (Date.now() - started < timeoutMs) {
     const chainHex = await window.ethereum.request({
-      method: "eth_chainId"
+      method: "eth_chainId",
     });
 
     const chainId = Number(BigInt(chainHex));
@@ -1009,14 +1124,13 @@ async function waitForExpectedChain(timeoutMs = 5000) {
       return chainId;
     }
 
-    el.chainStatus.textContent =
-      `Waiting for ${NETWORK_NAME} (${EXPECTED_CHAIN_ID})...`;
+    el.chainStatus.textContent = `Waiting for ${NETWORK_NAME} (${EXPECTED_CHAIN_ID})...`;
 
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
   const chainHex = await window.ethereum.request({
-    method: "eth_chainId"
+    method: "eth_chainId",
   });
 
   return Number(BigInt(chainHex));
@@ -1040,7 +1154,7 @@ async function boot() {
 
     if (chainId !== EXPECTED_CHAIN_ID) {
       throw new Error(
-        `Wrong chain: ${chainId}. Switch wallet to ${NETWORK_NAME} (${EXPECTED_CHAIN_ID}).`
+        `Wrong chain: ${chainId}. Switch wallet to ${NETWORK_NAME} (${EXPECTED_CHAIN_ID}).`,
       );
     }
 
@@ -1052,10 +1166,9 @@ async function boot() {
     state.readChainId = Number(network.chainId);
 
     await loadMarket(DEFAULT_MARKET_ID);
+    await discoverMarkets();
   } catch (err) {
-    setDemoMode(
-      err.message || `Unable to connect to ${NETWORK_NAME}`
-    );
+    setDemoMode(err.message || `Unable to connect to ${NETWORK_NAME}`);
     return;
   }
 

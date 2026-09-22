@@ -82,21 +82,37 @@ async function seedMarket(
     `${label} lot token approve`
   );
 
-  const sellSeeds = [
-    { tick: 121, lots: 60 },
-    { tick: 122, lots: 56 },
-    { tick: 123, lots: 52 },
-    { tick: 124, lots: 48 },
-    { tick: 125, lots: 44 }
-  ];
+  const sellSeeds = label === "TESTLOT"
+  ? [
+      { tick: 305, lots: 15 },
+      { tick: 306, lots: 25 },
+      { tick: 307, lots: 35 },
+      { tick: 308, lots: 45 },
+      { tick: 309, lots: 55 }
+    ]
+  : [
+      { tick: 121, lots: 60 },
+      { tick: 122, lots: 56 },
+      { tick: 123, lots: 52 },
+      { tick: 124, lots: 48 },
+      { tick: 125, lots: 44 }
+    ];
 
-  const buySeeds = [
-    { tick: 120, lots: 60 },
-    { tick: 119, lots: 56 },
-    { tick: 118, lots: 52 },
-    { tick: 117, lots: 48 },
-    { tick: 116, lots: 44 }
-  ];
+const buySeeds = label === "TESTLOT"
+  ? [
+      { tick: 304, lots: 18 },
+      { tick: 303, lots: 28 },
+      { tick: 302, lots: 38 },
+      { tick: 301, lots: 48 },
+      { tick: 300, lots: 58 }
+    ]
+  : [
+      { tick: 120, lots: 60 },
+      { tick: 119, lots: 56 },
+      { tick: 118, lots: 52 },
+      { tick: 117, lots: 48 },
+      { tick: 116, lots: 44 }
+    ];
 
   for (const order of sellSeeds) {
     await waitForReceipt(

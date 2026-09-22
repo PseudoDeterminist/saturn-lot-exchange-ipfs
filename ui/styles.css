@@ -126,6 +126,63 @@ body {
   border: 1px solid rgba(244, 184, 96, 0.3);
 }
 
+.market-select {
+  position: relative;
+}
+
+.market-select-btn {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.market-select-btn:hover {
+  background: rgba(244, 184, 96, 0.18);
+}
+
+.market-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #121923;
+  border: 1px solid rgba(244, 184, 96, 0.3);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  z-index: 100;
+}
+
+.market-menu[hidden] {
+  display: none;
+}
+
+.market-option {
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.market-option:hover {
+  background: rgba(244, 184, 96, 0.1);
+}
+
+.market-option.active {
+  color: var(--accent);
+  background: rgba(244, 184, 96, 0.12);
+}
+
+.market-option-id {
+  opacity: 0.55;
+  margin-left: 8px;
+  font-size: 0.75rem;
+}
+
 .btn {
   padding: 10px 16px;
   border-radius: 12px;
