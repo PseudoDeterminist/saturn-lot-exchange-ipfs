@@ -1,25 +1,73 @@
 const params = new URLSearchParams(window.location.search);
-const net = params.get("net") || "local";
 
-const LOCAL = {
-  rpcUrl: "http://127.0.0.1:8545",
-  chainId: 31337,
-  wetcAddress: "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-  strn10kAddress: "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
-  simpleLotTradeAddress: "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
-  maxLevels: 25,
-  maxOrders: 50,
+// During development, Hardhat is the default.
+// Production can later default to "etc" and omit Hardhat from the UI selector.
+const net = params.get("net") || "hardhat";
+
+const NETWORKS = {
+  hardhat: {
+    name: "Hardhat",
+    chainId: 31337,
+
+    // Useful for development / optional direct-RPC reads.
+    rpcUrl: "http://127.0.0.1:8545",
+
+    quoteSymbol: "WETC",
+    quoteTokenAddress: "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+
+    exchangeAddress: "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+
+    // Initial market shown when the UI loads.
+    defaultMarketId: 1,
+
+    maxLevels: 25,
+    maxOrders: 50,
+  },
+
+  etc: {
+    name: "Ethereum Classic",
+    chainId: 61,
+
+    // Normal production access will come through the user's wallet provider.
+    rpcUrl: null,
+
+    quoteSymbol: "WETC",
+    quoteTokenAddress: "0x82A618305706B14e7bcf2592D4B9324A366b6dAd",
+
+    // Fill this after SaturnLotExchange is deployed on ETC.
+    exchangeAddress: "",
+
+    defaultMarketId: 1,
+
+    maxLevels: 25,
+    maxOrders: 50,
+  },
+
+  eth: {
+    name: "Ethereum",
+    chainId: 1,
+
+    // Normal production access will come through the user's wallet provider.
+    rpcUrl: null,
+
+    quoteSymbol: "WETH",
+    quoteTokenAddress: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+
+    // Fill this after SaturnLotExchange is deployed on Ethereum.
+    exchangeAddress: "",
+
+    defaultMarketId: 1,
+
+    maxLevels: 25,
+    maxOrders: 50,
+  },
 };
 
-const ETC = {
-  rpcUrl: "http://127.0.0.1:8545",
-  chainId: 61,
-  wetcAddress: "0x82A618305706B14e7bcf2592D4B9324A366b6dAd",
-  strn10kAddress: "0x7d35D3938c3b4446473a4ac29351Bd93694b5DEF",
-  simpleLotTradeAddress: "0x989445dA165F787Bb07B9C04946D87BbF9051EEf",
-  maxLevels: 25,
-  maxOrders: 50,
-};
+if (!NETWORKS[net]) {
+  throw new Error(`Unknown network: ${net}`);
+}
 
-window.APP_CONFIG = net === "etc" ? ETC : LOCAL;
-window.APP_CONFIG.net = net;
+window.APP_CONFIG = {
+  ...NETWORKS[net],
+  net,
+};

@@ -4,14 +4,16 @@ const { ethers, network } = require("hardhat");
 
 const ROOT = path.join(__dirname, "..");
 const ENV_PATH = path.join(ROOT, ".env");
-const UI_CONFIG_PATH = path.join(ROOT, "ui", "config.js");
 
 function updateEnvFile(filePath, entries) {
   let lines = [];
+
   if (fs.existsSync(filePath)) {
     lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/);
   }
+
   const used = new Set();
+
   const next = lines.map((line) => {
     for (const [key, value] of Object.entries(entries)) {
       if (line.startsWith(`${key}=`)) {
@@ -21,42 +23,64 @@ function updateEnvFile(filePath, entries) {
     }
     return line;
   });
-  for (const [key, value] of Object.entries(entries)) {
-    if (!used.has(key)) next.push(`${key}=${value}`);
-  }
-  let last = next.length - 1;
-  while (last >= 0 && next[last] === "") last -= 1;
-  const output = last >= 0 ? `${next.slice(0, last + 1).join("\n")}\n` : "";
-  fs.writeFileSync(filePath, output);
-}
 
-function updateUiConfig(filePath, entries) {
-  if (!fs.existsSync(filePath)) return;
-  let text = fs.readFileSync(filePath, "utf8");
-  const mapping = {
-    wetcAddress: entries.WETC_ADDRESS,
-    strn10kAddress: entries.STRN10K_ADDRESS,
-    simpleLotTradeAddress: entries.SIMPLE_LOT_TRADE_ADDRESS
-  };
-  for (const [key, value] of Object.entries(mapping)) {
-    const re = new RegExp(`${key}:\\s*\"[^\"]*\"`);
-    if (re.test(text)) {
-      text = text.replace(re, `${key}: \"${value}\"`);
+  for (const [key, value] of Object.entries(entries)) {
+    if (!used.has(key)) {
+      next.push(`${key}=${value}`);
     }
   }
-  fs.writeFileSync(filePath, text);
+
+  while (next.length && next[next.length - 1] === "") {
+    next.pop();
+  }
+
+  fs.writeFileSync(filePath, `${next.join("\n")}\n`);
 }
 
-function writeAddresses(entries) {
-  updateEnvFile(ENV_PATH, entries);
-  updateUiConfig(UI_CONFIG_PATH, entries);
+async function waitForReceipt(tx, label) {
+  const hash = tx.hash;
+
+  for (let i = 0; i < 30; i += 1) {
+    try {
+      const receipt = await ethers.provider.getTransactionReceipt(hash);
+
+      if (receipt) {
+        if (receipt.status !== 1) {
+          throw new Error(`${label} reverted: ${hash}`);
+        }
+
+        return receipt;
+      }
+    } catch (err) {
+      if (!String(err).includes("transaction indexing is in progress")) {
+        throw err;
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(`Timed out waiting for ${label}: ${hash}`);
 }
 
-async function seedOrders(clob, wetc, strn10k, waitForReceipt) {
+async function seedMarket(
+  exchange,
+  wetc,
+  lotToken,
+  marketId,
+  label
+) {
   const maxApprove = ethers.MaxUint256;
 
-  await waitForReceipt(await wetc.approve(clob.target, maxApprove), "WETC approve");
-  await waitForReceipt(await strn10k.approve(clob.target, maxApprove), "STRN10K approve");
+  await waitForReceipt(
+    await wetc.approve(exchange.target, maxApprove),
+    `${label} WETC approve`
+  );
+
+  await waitForReceipt(
+    await lotToken.approve(exchange.target, maxApprove),
+    `${label} lot token approve`
+  );
 
   const sellSeeds = [
     { tick: 121, lots: 60 },
@@ -76,70 +100,197 @@ async function seedOrders(clob, wetc, strn10k, waitForReceipt) {
 
   for (const order of sellSeeds) {
     await waitForReceipt(
-      await clob.placeSell(order.tick, order.lots),
-      `seed sell ${order.tick}`
+      await exchange.placeSell(
+        marketId,
+        order.tick,
+        order.lots
+      ),
+      `${label} seed sell ${order.tick}`
     );
   }
 
   for (const order of buySeeds) {
     await waitForReceipt(
-      await clob.placeBuy(order.tick, order.lots),
-      `seed buy ${order.tick}`
+      await exchange.placeBuy(
+        marketId,
+        order.tick,
+        order.lots
+      ),
+      `${label} seed buy ${order.tick}`
     );
   }
 }
 
 async function main() {
   const [deployer] = await ethers.getSigners();
-  console.log("Network:", network.name, network.config.url || "in-process");
-  console.log("Deployer:", deployer.address);
 
-  async function waitForReceipt(tx, label) {
-    const hash = tx.hash;
-    for (let i = 0; i < 30; i += 1) {
-      try {
-        const receipt = await ethers.provider.getTransactionReceipt(hash);
-        if (receipt) {
-          return receipt;
-        }
-      } catch (err) {
-        if (!String(err).includes("transaction indexing is in progress")) {
-          throw err;
-        }
-      }
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-    throw new Error(`Timed out waiting for ${label} tx receipt: ${hash}`);
-  }
+  console.log(
+    "Network:",
+    network.name,
+    network.config.url || "in-process"
+  );
+
+  console.log("Deployer:", deployer.address);
 
   const TestERC20 = await ethers.getContractFactory("TestERC20");
 
-  const wetcSupply = ethers.parseUnits("1000000", 18); // 1,000,000 WETC
-  const strn10kSupply = ethers.parseUnits("100000", 0);  // 100,000 lots
+  // ------------------------------------------------------------------
+  // Deploy local WETC
+  // ------------------------------------------------------------------
 
-  const wetc = await TestERC20.deploy("Test ETC", "WETC", 18, wetcSupply);
-  await waitForReceipt(wetc.deploymentTransaction(), "WETC deploy");
+  const wetcSupply = ethers.parseUnits("1000000", 18);
+
+  const wetc = await TestERC20.deploy(
+    "Test Wrapped ETC",
+    "WETC",
+    18,
+    wetcSupply
+  );
+
+  await waitForReceipt(
+    wetc.deploymentTransaction(),
+    "WETC deploy"
+  );
+
   console.log("WETC:", wetc.target);
 
-  const strn10k = await TestERC20.deploy("STRN10K", "STRN10K", 0, strn10kSupply);
-  await waitForReceipt(strn10k.deploymentTransaction(), "STRN10K deploy");
+  // ------------------------------------------------------------------
+  // Deploy first Lot Token
+  // ------------------------------------------------------------------
+
+  const strn10kSupply = ethers.parseUnits("100000", 0);
+
+  const strn10k = await TestERC20.deploy(
+    "STRN10K",
+    "STRN10K",
+    0,
+    strn10kSupply
+  );
+
+  await waitForReceipt(
+    strn10k.deploymentTransaction(),
+    "STRN10K deploy"
+  );
+
   console.log("STRN10K:", strn10k.target);
 
-  const SaturnLotTrade = await ethers.getContractFactory("SaturnLotTrade");
-  const clob = await SaturnLotTrade.deploy(wetc.target, strn10k.target);
-  await waitForReceipt(clob.deploymentTransaction(), "SaturnLotTrade deploy");
-  console.log("SaturnLotTrade:", clob.target);
+  // ------------------------------------------------------------------
+  // Deploy second Lot Token so we can exercise multi-market behavior
+  // ------------------------------------------------------------------
 
-  await seedOrders(clob, wetc, strn10k, waitForReceipt);
-  console.log("Seeded initial book orders.");
+  const testLotSupply = ethers.parseUnits("100000", 0);
+
+  const testLot = await TestERC20.deploy(
+    "Test Lot Token",
+    "TESTLOT",
+    0,
+    testLotSupply
+  );
+
+  await waitForReceipt(
+    testLot.deploymentTransaction(),
+    "TESTLOT deploy"
+  );
+
+  console.log("TESTLOT:", testLot.target);
+
+  // ------------------------------------------------------------------
+  // Deploy SaturnLotExchange
+  // ------------------------------------------------------------------
+
+  const SaturnLotExchange =
+    await ethers.getContractFactory("SaturnLotExchange");
+
+  const exchange =
+    await SaturnLotExchange.deploy(wetc.target);
+
+  await waitForReceipt(
+    exchange.deploymentTransaction(),
+    "SaturnLotExchange deploy"
+  );
+
+  console.log("SaturnLotExchange:", exchange.target);
+
+  // ------------------------------------------------------------------
+  // Approve two markets
+  // ------------------------------------------------------------------
+
+  await waitForReceipt(
+    await exchange.approveMarket(strn10k.target),
+    "approve STRN10K market"
+  );
+
+  const strn10kMarketId =
+    await exchange.marketIdOf(strn10k.target);
+
+  console.log(
+    `Market ${strn10kMarketId}: STRN10K / WETC`
+  );
+
+  await waitForReceipt(
+    await exchange.approveMarket(testLot.target),
+    "approve TESTLOT market"
+  );
+
+  const testLotMarketId =
+    await exchange.marketIdOf(testLot.target);
+
+  console.log(
+    `Market ${testLotMarketId}: TESTLOT / WETC`
+  );
+
+  // ------------------------------------------------------------------
+  // Seed both order books
+  // ------------------------------------------------------------------
+
+  await seedMarket(
+    exchange,
+    wetc,
+    strn10k,
+    strn10kMarketId,
+    "STRN10K"
+  );
+
+  console.log("Seeded STRN10K / WETC book.");
+
+  await seedMarket(
+    exchange,
+    wetc,
+    testLot,
+    testLotMarketId,
+    "TESTLOT"
+  );
+
+  console.log("Seeded TESTLOT / WETC book.");
+
+  // ------------------------------------------------------------------
+  // Save local deployment data
+  // ------------------------------------------------------------------
 
   const addresses = {
     WETC_ADDRESS: wetc.target,
     STRN10K_ADDRESS: strn10k.target,
-    SIMPLE_LOT_TRADE_ADDRESS: clob.target
+    TESTLOT_ADDRESS: testLot.target,
+    SATURN_LOT_EXCHANGE_ADDRESS: exchange.target,
+    STRN10K_MARKET_ID: strn10kMarketId.toString(),
+    TESTLOT_MARKET_ID: testLotMarketId.toString()
   };
-  writeAddresses(addresses);
-  console.log("Saved addresses to .env and ui/config.js");
+
+  updateEnvFile(ENV_PATH, addresses);
+
+  console.log("");
+  console.log("Local deployment complete.");
+  console.log("");
+  console.log("WETC:", wetc.target);
+  console.log("Exchange:", exchange.target);
+  console.log(
+    `Market ${strn10kMarketId}: STRN10K / WETC`
+  );
+  console.log(
+    `Market ${testLotMarketId}: TESTLOT / WETC`
+  );
+  console.log("");
+  console.log("Saved deployment values to .env");
 }
 
 main().catch((err) => {
