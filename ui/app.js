@@ -15,6 +15,7 @@ const DEMO_MODE =
   new URLSearchParams(window.location.search).get("demo") === "1";
 
 const ABI = [
+  "event Trade(uint32 indexed marketId,uint64 seq,bytes32 newHash,uint64 indexed orderId,address taker,address indexed maker,bool takerIsBuy,int32 tick,uint96 pricePerLot,uint32 lotsFilled,uint128 valueFilled,uint32 lotsRemainingAfter,uint128 valueRemainingAfter)",
   "function marketCount() view returns (uint32)",
   "function marketIdOf(address lotToken) view returns (uint32)",
 
@@ -59,8 +60,8 @@ const el = {
   clearBtn: document.getElementById("clear-btn"),
   buyBook: document.getElementById("buy-book"),
   sellBook: document.getElementById("sell-book"),
-  spreadValue: document.getElementById("spread-value"),
-  midTick: document.getElementById("mid-tick"),
+  lastTaken: document.getElementById("last-taken"),
+  lastTakenPrice: document.getElementById("last-taken-price"),
   bestBid: document.getElementById("best-bid"),
   bestAsk: document.getElementById("best-ask"),
   emptyBanner: document.getElementById("empty-banner"),
@@ -222,7 +223,8 @@ function renderDemo() {
   const sell = buildDemoBook("sell");
   renderBook(el.buyBook, buy, "buy");
   renderBook(el.sellBook, sell, "sell");
-  updateSpread(buy[0], sell[0]);
+  updateMidPrice(buy[0], sell[0]);
+  renderLastTaken(null);
   renderOrders(buildDemoOrders(), buildDemoOrders(true));
   updateChart(buy, sell);
   el.lastUpdate.textContent = `Last update: demo`;
@@ -412,6 +414,7 @@ async function selectMarket(marketId) {
     state.lastTradeTick = null;
     state.lastTradeBlock = null;
     state.tape = [];
+    renderLastTaken(null);
 
     await loadMarket(marketId);
 
@@ -495,21 +498,39 @@ async function connectWallet() {
   }
 }
 
-function updateSpread(bestBid, bestAsk) {
+function updateMidPrice(bestBid, bestAsk) {
   if (!bestBid || !bestAsk) {
-    el.spreadValue.textContent = "--";
-    el.midTick.textContent = "--";
+    el.midPrice.textContent = "--";
     return;
   }
-  const bidPrice = BigInt(bestBid.price);
-  const askPrice = BigInt(bestAsk.price);
-  const bidTick = BigInt(bestBid.tick);
-  const askTick = BigInt(bestAsk.tick);
-  const spread = askPrice - bidPrice;
-  const mid = (askPrice + bidPrice) / 2n;
-  el.spreadValue.textContent = `${formatWetc(spread)} WETC`;
-  el.midTick.textContent = formatTick((askTick + bidTick) / 2n);
+  const mid = (BigInt(bestAsk.price) + BigInt(bestBid.price)) / 2n;
   el.midPrice.textContent = `${formatWetc(mid)} WETC`;
+}
+
+function renderLastTaken(price, takerIsBuy = null) {
+  const side = price === null || takerIsBuy === null
+    ? "neutral"
+    : takerIsBuy ? "buy" : "sell";
+  el.lastTaken.className = `last-taken ${side}`;
+  el.lastTakenPrice.textContent = price === null ? "--" : formatWetc(price);
+}
+
+async function getLastTakerSide(contract, marketId, market) {
+  if (market.lastTradeBlock === 0n) return null;
+  try {
+    // Restrict the query to this market's last execution block, including on reload.
+    const block = toNumber(market.lastTradeBlock);
+    const events = await contract.queryFilter(contract.filters.Trade(marketId), block, block);
+    const latest = events
+      .filter((event) => !event.removed)
+      .sort((a, b) => b.index - a.index)[0];
+    if (!latest || latest.args.tick !== market.lastTradeTick ||
+        latest.args.pricePerLot !== market.lastTradePrice) return null;
+    return latest.args.takerIsBuy;
+  } catch (err) {
+    console.warn("Last trade event unavailable:", err);
+    return null;
+  }
 }
 
 function renderBook(container, levels, side) {
@@ -517,21 +538,54 @@ function renderBook(container, levels, side) {
     container.innerHTML = '<div class="panel-sub">No levels.</div>';
     return;
   }
-  const maxLots = Math.max(...levels.map((lvl) => toNumber(lvl.totalLots)), 1);
-  container.innerHTML = levels
-    .map((lvl, idx) => {
-      const depth = Math.round((toNumber(lvl.totalLots) / maxLots) * 100);
+
+  const maxLots = Math.max(
+    ...levels.map((lvl) => toNumber(lvl.totalLots)),
+    1
+  );
+
+  /*
+    Contract/view order:
+      sells: best ask -> worse asks
+      buys:  best bid -> worse bids
+
+    Traditional stacked display:
+      sells: worse asks -> best ask
+      last executed price
+      buys:  best bid -> worse bids
+  */
+  const displayLevels = levels.map((lvl, index) => ({
+    lvl,
+    isBest: index === 0
+  }));
+
+  if (side === "sell") {
+    displayLevels.reverse();
+  }
+
+  container.innerHTML = displayLevels
+    .map(({ lvl, isBest }) => {
+      const depth = Math.round(
+        (toNumber(lvl.totalLots) / maxLots) * 100
+      );
+
+      const tick = formatTick(lvl.tick);
       const price = formatWetc(lvl.price);
       const lots = formatLots(lvl.totalLots);
       const total = formatWetc(lvl.totalValue);
+
       return `
-        <div class="book-row ${side}${idx === 0 ? " best" : ""}">
-          <div class="bar" style="width:${depth}%;${
-        side === "buy" ? "right:0;" : "left:0;"
-      }"></div>
-          <span>${price}</span>
-          <span>${lots}</span>
-          <span>${total}</span>
+        <div class="book-row ${side}${isBest ? " best" : ""}">
+          <div
+            class="bar"
+            style="width:${depth}%;${side === "buy" ? "right:0;" : "left:0;"}"
+          ></div>
+
+          <span class="col-tick">${tick}</span>
+          <span class="col-sep">·</span>
+          <span class="col-price">${price}</span>
+          <span class="col-lots">${lots}</span>
+          <span class="col-total">${total}</span>
         </div>
       `;
     })
@@ -690,6 +744,8 @@ async function refresh() {
     const [buyBook, buyN] = buyRes.value;
     const [sellBook, sellN] = sellRes.value;
     const market = marketRes.value;
+    const takerIsBuy = await getLastTakerSide(state.readContract, marketId, market);
+    if (marketId !== state.marketId) return;
 
     const [buyOrdersRes, sellOrdersRes] = await Promise.all([
       safeCall("getBuyOrders", () =>
@@ -742,7 +798,7 @@ async function refresh() {
     renderBook(el.buyBook, buyLevels, "buy");
     renderBook(el.sellBook, sellLevels, "sell");
 
-    updateSpread(
+    updateMidPrice(
       buyLevels.length ? buyLevels[0] : null,
       sellLevels.length ? sellLevels[0] : null,
     );
@@ -762,6 +818,7 @@ async function refresh() {
         : `${formatTick(bestSellTick)} @ ${formatWetc(sellLevels[0].price)}`;
 
     const hasTrade = lastTradeBlock !== 0n;
+    renderLastTaken(hasTrade ? lastTradePrice : null, takerIsBuy);
 
     el.lastTrade.textContent = hasTrade
       ? `${formatTick(lastTradeTick)} @ ${formatWetc(lastTradePrice)}`

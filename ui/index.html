@@ -7,6 +7,7 @@
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
+
   <body>
     <div class="bg-grid"></div>
     <div class="bg-glow"></div>
@@ -15,44 +16,102 @@
       <header class="topbar">
         <div class="brand">
           <div class="brand-mark">SLT</div>
+
           <div>
             <div class="brand-title">Saturn Lot Exchange</div>
-            <div class="brand-sub" id="brand-sub">Market Loading...</div>
+            <div class="brand-sub" id="brand-sub">
+              Market Loading...
+            </div>
           </div>
         </div>
+
         <div class="top-actions">
           <div class="pill" id="status-pill">Offline</div>
+
           <div class="market-select">
-            <button class="pair-tag market-select-btn" id="pair-tag" type="button">
+            <button
+              class="pair-tag market-select-btn"
+              id="pair-tag"
+              type="button"
+            >
               Market Loading... ▾
             </button>
-          
-            <div class="market-menu" id="market-menu" hidden></div>
-          </div>          <button class="btn ghost" id="copy-btn">Copy Addresses</button>
-          <button class="btn ghost" id="connect-btn">Connect Wallet</button>
+
+            <div
+              class="market-menu"
+              id="market-menu"
+              hidden
+            ></div>
+          </div>
+
+          <button
+            class="btn ghost"
+            id="copy-btn"
+          >
+            Copy Addresses
+          </button>
+
+          <button
+            class="btn ghost"
+            id="connect-btn"
+          >
+            Connect Wallet
+          </button>
         </div>
       </header>
 
       <section class="stats-strip">
-        <div class="stat" id="last-trade-stat">
+        <div
+          class="stat"
+          id="last-trade-stat"
+        >
           <span class="label">Last trade</span>
-          <span class="value" id="last-trade">--</span>
+          <span
+            class="value"
+            id="last-trade"
+          >
+            --
+          </span>
         </div>
+
         <div class="stat">
           <span class="label">Best bid</span>
-          <span class="value" id="best-bid">--</span>
+          <span
+            class="value"
+            id="best-bid"
+          >
+            --
+          </span>
         </div>
+
         <div class="stat">
           <span class="label">Best ask</span>
-          <span class="value" id="best-ask">--</span>
+          <span
+            class="value"
+            id="best-ask"
+          >
+            --
+          </span>
         </div>
+
         <div class="stat">
           <span class="label">Book escrow</span>
-          <span class="value" id="escrow-totals">--</span>
+          <span
+            class="value"
+            id="escrow-totals"
+          >
+            --
+          </span>
         </div>
+
         <div class="stat">
           <span class="label">Chain</span>
-          <span class="value" id="chain-status">--</span>
+          <span
+            class="value"
+            id="chain-status"
+          >
+            --
+          </span>
         </div>
       </section>
 
@@ -60,22 +119,57 @@
         <section class="panel chart-panel">
           <header class="panel-header">
             <h2>Price action</h2>
-            <div class="panel-sub">Recent ticks - simulated if offline</div>
+
+            <div class="panel-sub">
+              Recent ticks - simulated if offline
+            </div>
           </header>
+
           <div class="chart-wrap">
-            <canvas id="sparkline" width="560" height="200"></canvas>
+            <canvas
+              id="sparkline"
+              width="560"
+              height="200"
+            ></canvas>
+
             <div class="chart-meta">
               <div>
-                <div class="meta-label">Mid price</div>
-                <div class="meta-value" id="mid-price">--</div>
+                <div class="meta-label">
+                  Mid price
+                </div>
+
+                <div
+                  class="meta-value"
+                  id="mid-price"
+                >
+                  --
+                </div>
               </div>
+
               <div>
-                <div class="meta-label">Last block</div>
-                <div class="meta-value" id="last-block">--</div>
+                <div class="meta-label">
+                  Last block
+                </div>
+
+                <div
+                  class="meta-value"
+                  id="last-block"
+                >
+                  --
+                </div>
               </div>
+
               <div>
-                <div class="meta-label">Liquidity</div>
-                <div class="meta-value" id="liquidity">--</div>
+                <div class="meta-label">
+                  Liquidity
+                </div>
+
+                <div
+                  class="meta-value"
+                  id="liquidity"
+                >
+                  --
+                </div>
               </div>
             </div>
           </div>
@@ -85,51 +179,114 @@
           <header class="panel-header split">
             <div>
               <h2>Order book</h2>
-              <div class="panel-sub">Best levels, FIFO inside tick</div>
+
+              <div class="panel-sub">
+                Best levels, FIFO inside tick
+              </div>
             </div>
+
             <div class="book-controls">
               <label class="field-inline">
                 <span>Depth</span>
-                <input id="depth-input" type="number" min="1" max="200" value="25" />
+
+                <input
+                  id="depth-input"
+                  type="number"
+                  min="1"
+                  max="200"
+                  value="25"
+                />
               </label>
-              <div class="depth-toggle" id="depth-toggle">
-                <button class="chip active" data-depth="25">25</button>
-                <button class="chip" data-depth="50">50</button>
-                <button class="chip" data-depth="100">100</button>
+
+              <div
+                class="depth-toggle"
+                id="depth-toggle"
+              >
+                <button
+                  class="chip active"
+                  data-depth="25"
+                >
+                  25
+                </button>
+
+                <button
+                  class="chip"
+                  data-depth="50"
+                >
+                  50
+                </button>
+
+                <button
+                  class="chip"
+                  data-depth="100"
+                >
+                  100
+                </button>
               </div>
-              <button class="btn ghost" id="refresh-btn">Refresh</button>
-              <button class="btn ghost" id="seed-btn">Seed</button>
-              <button class="btn ghost" id="clear-btn" disabled>Clear My Orders</button>
+
+              <button
+                class="btn ghost"
+                id="refresh-btn"
+              >
+                Refresh
+              </button>
+
+              <button
+                class="btn ghost"
+                id="seed-btn"
+              >
+                Seed
+              </button>
+
+              <button
+                class="btn ghost"
+                id="clear-btn"
+                disabled
+              >
+                Clear My Orders
+              </button>
             </div>
           </header>
-          <div class="empty-banner" id="empty-banner" hidden>
+
+          <div
+            class="empty-banner"
+            id="empty-banner"
+            hidden
+          >
             No liquidity yet. Place the first order to seed the book.
           </div>
 
-          <div class="book-grid">
-            <div class="book-column">
-              <div class="book-head sell">Sell</div>
-              <div class="book-cols">
-                <span>Price</span>
-                <span>Lots</span>
-                <span>Total</span>
-              </div>
-              <div class="book-rows" id="sell-book"></div>
+          <div class="stacked-book">
+
+            <div class="book-head sell">Sell</div>
+
+            <div class="book-cols">
+              <span class="col-tick">Tick</span>
+              <span class="col-sep">·</span>
+              <span class="col-price">Price</span>
+              <span class="col-lots">Lots</span>
+              <span class="col-total">Total</span>
             </div>
-            <div class="spread">
-              <div class="spread-label">Spread</div>
-              <div class="spread-value" id="spread-value">--</div>
-              <div class="spread-sub">Mid @ <span id="mid-tick">--</span></div>
+
+            <div class="book-rows sell-rows" id="sell-book"></div>
+
+            <div class="last-taken neutral" id="last-taken">
+              <span class="last-taken-label">Last</span>
+              <span class="last-taken-price" id="last-taken-price">--</span>
             </div>
-            <div class="book-column">
-              <div class="book-head buy">Buy</div>
-              <div class="book-cols">
-                <span>Price</span>
-                <span>Lots</span>
-                <span>Total</span>
-              </div>
-              <div class="book-rows" id="buy-book"></div>
+
+            <div class="book-rows buy-rows" id="buy-book"></div>
+
+            <div class="book-cols">
+              <span class="col-tick">Tick</span>
+              <span class="col-sep">·</span>
+              <span class="col-price">Price</span>
+              <span class="col-lots">Lots</span>
+              <span class="col-total">Total</span>
             </div>
+
+            <div class="book-head buy">Buy</div>
+
           </div>
         </section>
 
@@ -137,62 +294,162 @@
           <header class="panel-header split">
             <div>
               <h2>Order ticket</h2>
-              <div class="panel-sub">Place or preview maker orders</div>
+
+              <div class="panel-sub">
+                Place or preview maker orders
+              </div>
             </div>
-            <div class="segmented" id="side-toggle">
-              <button class="seg active" data-side="buy">Buy</button>
-              <button class="seg" data-side="sell">Sell</button>
+
+            <div
+              class="segmented"
+              id="side-toggle"
+            >
+              <button
+                class="seg active"
+                data-side="buy"
+              >
+                Buy
+              </button>
+
+              <button
+                class="seg"
+                data-side="sell"
+              >
+                Sell
+              </button>
             </div>
           </header>
 
           <div class="ticket-body">
             <label class="field">
               <span>Tick</span>
-              <input id="tick-input" type="number" step="1" placeholder="e.g. 120" />
+
+              <input
+                id="tick-input"
+                type="number"
+                step="1"
+                placeholder="e.g. 120"
+              />
             </label>
+
             <label class="field">
               <span>Lots</span>
-              <input id="lots-input" type="number" step="1" min="1" placeholder="e.g. 25" />
+
+              <input
+                id="lots-input"
+                type="number"
+                step="1"
+                min="1"
+                placeholder="e.g. 25"
+              />
             </label>
+
             <div class="ticket-preview">
               <div>
-                <div class="meta-label">Price per lot</div>
-                <div class="meta-value" id="preview-price">--</div>
+                <div class="meta-label">
+                  Price per lot
+                </div>
+
+                <div
+                  class="meta-value"
+                  id="preview-price"
+                >
+                  --
+                </div>
               </div>
+
               <div>
-                <div class="meta-label">Total value</div>
-                <div class="meta-value" id="preview-value">--</div>
+                <div class="meta-label">
+                  Total value
+                </div>
+
+                <div
+                  class="meta-value"
+                  id="preview-value"
+                >
+                  --
+                </div>
               </div>
             </div>
-          <div class="ticket-actions">
-            <button class="btn" id="preview-btn">Preview</button>
-            <button class="btn solid" id="place-btn" disabled>Place Order</button>
+
+            <div class="ticket-actions">
+              <button
+                class="btn"
+                id="preview-btn"
+              >
+                Preview
+              </button>
+
+              <button
+                class="btn solid"
+                id="place-btn"
+                disabled
+              >
+                Place Order
+              </button>
+            </div>
+
+            <div class="wallet-actions">
+              <button
+                class="btn ghost mini"
+                id="add-wetc"
+              >
+                Add WETC
+              </button>
+
+              <button
+                class="btn ghost mini"
+                id="add-lot-token"
+              >
+                Add Lot Token
+              </button>
+            </div>
+
+            <div
+              class="ticket-foot"
+              id="ticket-status"
+            >
+              Connect a wallet to trade.
+            </div>
           </div>
-          <div class="wallet-actions">
-            <button class="btn ghost mini" id="add-wetc">Add WETC</button>
-            <button class="btn ghost mini" id="add-lot-token">Add Lot Token</button>
-          </div>
-          <div class="ticket-foot" id="ticket-status">Connect a wallet to trade.</div>
-        </div>
-      </section>
+        </section>
       </main>
 
       <section class="panel bottom-panel">
         <header class="panel-header split">
           <div>
             <h2>Orders &amp; tape</h2>
-            <div class="panel-sub">Live book orders and recent trades</div>
+
+            <div class="panel-sub">
+              Live book orders and recent trades
+            </div>
           </div>
-          <div class="ticker" id="last-update">Last update: --</div>
+
+          <div
+            class="ticker"
+            id="last-update"
+          >
+            Last update: --
+          </div>
         </header>
+
         <div class="bottom-grid">
           <div class="panel-section">
             <h3>Open orders</h3>
-            <div class="table" id="open-orders"></div>
+
+            <div
+              class="table"
+              id="open-orders"
+            ></div>
           </div>
+
           <div class="panel-section">
             <h3>Recent trades</h3>
-            <div class="table" id="recent-trades"></div>
+
+            <div
+              class="table"
+              id="recent-trades"
+            ></div>
           </div>
         </div>
       </section>
