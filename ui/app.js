@@ -82,8 +82,9 @@ const el = {
   previewBtn: document.getElementById("preview-btn"),
   placeBtn: document.getElementById("place-btn"),
   addWetc: document.getElementById("add-wetc"),
-  addStrn10k: document.getElementById("add-strn10k"),
-  ticketStatus: document.getElementById("ticket-status"),
+  brandSub: document.getElementById("brand-sub"),
+  pairTag: document.getElementById("pair-tag"),
+  addLotToken: document.getElementById("add-lot-token"),  ticketStatus: document.getElementById("ticket-status"),
 };
 
 const state = {
@@ -359,6 +360,21 @@ async function loadMarket(marketId) {
 
   state.lotTokenSymbol = symbol;
   state.lotTokenDecimals = Number(decimals);
+
+  const quoteSymbol = config.quoteSymbol || "WETC";
+  const pairLabel = `${state.lotTokenSymbol} / ${quoteSymbol}`;
+  
+  if (el.brandSub) {
+    el.brandSub.textContent = `${pairLabel} - CLOB`;
+  }
+  
+  if (el.pairTag) {
+    el.pairTag.textContent = pairLabel;
+  }
+  
+  if (el.addLotToken) {
+    el.addLotToken.textContent = `Add ${state.lotTokenSymbol}`;
+  }
 
   return market;
 }
@@ -930,13 +946,13 @@ function bindEvents() {
       addTokenToWallet(WETC_ADDRESS, config.quoteSymbol || "WETC", 18),
     );
   }
-  if (el.addStrn10k) {
-    el.addStrn10k.addEventListener("click", () =>
+  if (el.addLotToken) {
+    el.addLotToken.addEventListener("click", () =>
       addTokenToWallet(
         state.lotTokenAddress,
         state.lotTokenSymbol || "LOT",
-        state.lotTokenDecimals ?? 0,
-      ),
+        state.lotTokenDecimals ?? 0
+      )
     );
   }
   el.refreshBtn.addEventListener("click", refresh);
