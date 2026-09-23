@@ -1,4 +1,4 @@
-/* global ethers, TradeHistory */
+/* global ethers, TradeHistory, ChartHistory */
 const config = window.APP_CONFIG || {};
 
 const NETWORK_NAME = config.name || "Unknown";
@@ -72,6 +72,7 @@ const el = {
   lastBlock: document.getElementById("last-block"),
   liquidity: document.getElementById("liquidity"),
   sparkline: document.getElementById("sparkline"),
+  chartStatus: document.getElementById("chart-status"),
   openOrders: document.getElementById("open-orders"),
   recentTrades: document.getElementById("recent-trades"),
   lastUpdate: document.getElementById("last-update"),
@@ -119,14 +120,21 @@ const state = {
   readChainId: null,
 };
 
+const chartHistory = ChartHistory.create({ onChange: updateChart });
 const recentTrades = TradeHistory.create({
+  onSubscribe(options) {
+    void chartHistory.start({ ...options, exchangeDeploymentBlock: config.exchangeDeploymentBlock });
+  },
+  onLive(trade, removed) { void chartHistory.append(trade, removed); },
   onChange(snapshot) {
     state.tradeHistory = snapshot;
+    if (snapshot.status === "error") chartHistory.fail(snapshot.error);
     renderTape();
   },
 });
 
 function loadRecentTrades() {
+  chartHistory.clear();
   return recentTrades.start(state.readContract, state.readProvider, state.marketId);
 }
 
@@ -238,7 +246,7 @@ function renderDemo() {
   updateMidPrice(buy[0], sell[0]);
   renderLastTaken(null);
   renderOrders(buildDemoOrders(), buildDemoOrders(true));
-  updateChart(buy, sell);
+
   el.lastUpdate.textContent = `Last update: demo`;
 }
 
@@ -322,6 +330,7 @@ async function copyAddresses() {
 }
 
 async function initProvider() {
+  chartHistory.clear();
   await recentTrades.stop();
   if (!window.ethereum) {
     throw new Error("No injected wallet provider found");
@@ -424,6 +433,7 @@ async function selectMarket(marketId) {
 
     state.lastTradeTick = null;
     state.lastTradeBlock = null;
+    chartHistory.clear();
     await recentTrades.stop();
     state.tradeHistory = { status: "loading", trades: [], error: null };
     renderTape();
@@ -637,6 +647,7 @@ function renderOrders(buyOrders, sellOrders) {
 }
 
 function reportTradeHistoryError(error) {
+  chartHistory.fail(error);
   state.tradeHistory = { status: "error", trades: [], error };
   renderTape();
 }
@@ -647,32 +658,45 @@ function renderTape() {
   });
 }
 
-function updateChart(buy, sell) {
+function updateChart(snapshot) {
   const ctx = el.sparkline.getContext("2d");
-  const width = el.sparkline.width;
-  const height = el.sparkline.height;
+  const width = el.sparkline.width, height = el.sparkline.height;
   ctx.clearRect(0, 0, width, height);
-
-  const points = [...sell.slice(0, 8), ...buy.slice(0, 8)]
-    .map((lvl) => Number(ethers.formatUnits(lvl.price, 18)))
-    .filter((val) => Number.isFinite(val));
-
-  if (!points.length) return;
-
-  const min = Math.min(...points);
-  const max = Math.max(...points);
-  const range = max - min || 1;
-
+  const trades = snapshot.trades;
+  el.chartStatus.textContent = snapshot.status === "error"
+    ? `Execution history unavailable: ${errorMessage(snapshot.error)}`
+    : snapshot.status === "loading" ? "Loading historical executions…"
+    : !trades.length ? "No executions yet. Maker orders are not trades."
+    : `Historical executions · ${trades.length} fill${trades.length === 1 ? "" : "s"} · gaps over 1 day shown as breaks`;
+  if (!trades.length) return;
+  let min = trades[0].price, max = min;
+  for (const t of trades) { if (t.price < min) min = t.price; if (t.price > max) max = t.price; }
+  const range = max - min;
+  const first = trades[0].timestamp, last = trades[trades.length - 1].timestamp;
+  const xFor = t => last === first ? width / 2 : 58 + (t.timestamp - first) / (last - first) * (width - 74);
+  const yFor = t => range === 0n ? height / 2 : height - 32 - Number(t.price - min) / Number(range) * (height - 56);
   ctx.strokeStyle = "rgba(244, 184, 96, 0.9)";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  points.forEach((val, idx) => {
-    const x = (idx / (points.length - 1 || 1)) * (width - 20) + 10;
-    const y = height - ((val - min) / range) * (height - 40) - 20;
-    if (idx === 0) ctx.moveTo(x, y);
+  trades.forEach((t, i) => {
+    const x = xFor(t), y = yFor(t);
+    // Do not imply continuous activity across long inactive periods.
+    if (i === 0 || t.timestamp - trades[i - 1].timestamp > 86400) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
+  for (const t of trades) {
+    ctx.fillStyle = t.takerIsBuy ? "#4ad39b" : "#ff6b6b";
+    ctx.beginPath(); ctx.arc(xFor(t), yFor(t), 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = "#a5adba";
+  ctx.font = "10px monospace";
+  ctx.textAlign = "left";
+  ctx.fillText(formatWetc(max), 4, 18);
+  if (max !== min) ctx.fillText(formatWetc(min), 4, height - 32);
+  const label = seconds => new Date(seconds * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+  ctx.fillText(label(first), 8, height - 8);
+  if (last !== first) { ctx.textAlign = "right"; ctx.fillText(label(last), width - 8, height - 8); }
 }
 
 function buildDemoBook(side) {
@@ -795,7 +819,7 @@ async function refresh() {
 
     renderOrders(buyOrdersList, sellOrdersList);
 
-    updateChart(buyLevels, sellLevels);
+
 
     el.bestBid.textContent =
       bestBuyTick === NONE || !buyLevels.length
@@ -1089,7 +1113,7 @@ function bindEvents() {
   }
   el.refreshBtn.addEventListener("click", () => {
     refresh();
-    if (state.readContract && state.tradeHistory.status === "error") {
+    if (state.readContract) {
       void loadRecentTrades().catch(reportTradeHistoryError);
     }
   });
@@ -1183,6 +1207,7 @@ async function waitForExpectedChain(timeoutMs = 5000) {
 async function boot() {
   bindEvents();
   renderTape();
+  chartHistory.clear();
 
   el.depthInput.value = MAX_LEVELS_DEFAULT.toString();
   updateDepthToggle(MAX_LEVELS_DEFAULT);

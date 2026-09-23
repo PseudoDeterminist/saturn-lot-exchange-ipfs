@@ -8,6 +8,7 @@
     return {
       marketId: Number(a.marketId),
       blockNumber: Number(log.blockNumber),
+      blockHash: log.blockHash,
       transactionIndex: Number(log.transactionIndex),
       logIndex: Number(log.index ?? log.logIndex),
       transactionHash: log.transactionHash,
@@ -28,7 +29,29 @@
     return /block range|range.{0,40}(too (large|wide)|exceed|limit)|too many (results|logs)|query returned more than|response size exceeded|log response size exceeded|limited to.{0,30}blocks/i.test(message);
   }
 
-  function create({ onChange, limit = RECENT_TRADE_LIMIT }) {
+  // Shared backward range walker; callers decide when enough history is loaded.
+  async function* ranges({ contract, marketId, fromBlock = 0, toBlock, active = () => true }) {
+    const filter = contract.filters.Trade(marketId);
+    let end = toBlock, size = 10000, ceiling = 160000;
+    while (active() && end >= fromBlock) {
+      const from = Math.max(fromBlock, end - size + 1);
+      let logs;
+      try { logs = await contract.queryFilter(filter, from, end); }
+      catch (error) {
+        if (!active()) return;
+        const count = end - from + 1;
+        if (!rangeTooLarge(error) || count === 1) throw error;
+        size = ceiling = Math.max(1, Math.floor(count / 2));
+        continue;
+      }
+      if (!active()) return;
+      yield logs;
+      end = from - 1;
+      size = Math.min(size * 2, ceiling);
+    }
+  }
+
+  function create({ onChange, onSubscribe = () => {}, onLive = () => {}, limit = RECENT_TRADE_LIMIT }) {
     let current = null;
     let generation = 0;
 
@@ -84,34 +107,20 @@
       session.handler = (...args) => {
         if (!active()) return;
         const payload = args[args.length - 1];
-        merge(session, [{ ...payload.log, args: payload.args }]);
+        const log = { ...payload.log, args: payload.args };
+        merge(session, [log]);
+        onLive(normalize(log), Boolean(log.removed));
       };
       try {
         // Subscribe before taking the history snapshot so no block falls in a gap.
         session.subscription = Promise.resolve(contract.on(session.filter, session.handler));
         await session.subscription;
         if (!active()) return;
-        let end = await provider.getBlockNumber();
-        let windowSize = 10000;
-        let acceptedMax = 160000;
-        while (active() && end >= 0) {
-          const from = Math.max(0, end - windowSize + 1);
-          let logs;
-          try {
-            logs = await contract.queryFilter(session.filter, from, end);
-          } catch (error) {
-            if (!active()) return;
-            const range = end - from + 1;
-            if (!rangeTooLarge(error) || range === 1) throw error;
-            acceptedMax = Math.max(1, Math.floor(range / 2));
-            windowSize = acceptedMax;
-            continue;
-          }
-          if (!active()) return;
+        onSubscribe({ contract, provider, marketId: session.marketId });
+        const tip = await provider.getBlockNumber();
+        for await (const logs of ranges({ contract, marketId, toBlock: tip, active })) {
           merge(session, logs);
-          if (session.trades.size >= limit || from === 0) break;
-          end = from - 1;
-          windowSize = Math.min(windowSize * 2, acceptedMax);
+          if (session.trades.size >= limit) break;
         }
         if (active()) {
           session.status = "ready";
@@ -143,5 +152,5 @@
     return rows + (message ? `<div class="panel-sub" role="status">${escape(message)}</div>` : "");
   }
 
-  root.TradeHistory = { TRADE_EVENT, RECENT_TRADE_LIMIT, normalize, compare, identity, rangeTooLarge, create, render };
+  root.TradeHistory = { TRADE_EVENT, RECENT_TRADE_LIMIT, normalize, compare, identity, rangeTooLarge, ranges, create, render };
 })(globalThis);

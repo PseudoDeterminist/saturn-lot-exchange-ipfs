@@ -17,6 +17,9 @@ const NETWORKS = {
 
     exchangeAddress: "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
 
+    // null: locate the deployment block through the injected provider.
+    exchangeDeploymentBlock: null,
+
     // Initial market shown when the UI loads.
     defaultMarketId: 1,
 
@@ -36,6 +39,8 @@ const NETWORKS = {
 
     // Fill this after SaturnLotExchange is deployed on ETC.
     exchangeAddress: "",
+    // Set to the deployment receipt block when deploying this network.
+    exchangeDeploymentBlock: null,
 
     defaultMarketId: 1,
 
@@ -55,6 +60,8 @@ const NETWORKS = {
 
     // Fill this after SaturnLotExchange is deployed on Ethereum.
     exchangeAddress: "",
+    // Set to the deployment receipt block when deploying this network.
+    exchangeDeploymentBlock: null,
 
     defaultMarketId: 1,
 

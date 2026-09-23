@@ -120,8 +120,8 @@
           <header class="panel-header">
             <h2>Price action</h2>
 
-            <div class="panel-sub">
-              Recent ticks - simulated if offline
+            <div class="panel-sub" id="chart-status" role="status">
+              Loading historical executions…
             </div>
           </header>
 
@@ -400,6 +400,7 @@
     <script src="./config.js"></script>
     <script src="./vendor/ethers.umd.min.js"></script>
     <script src="./trade-history.js"></script>
+    <script src="./chart-history.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>
