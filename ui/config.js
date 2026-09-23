@@ -20,7 +20,7 @@ const NETWORKS = {
     // Initial market shown when the UI loads.
     defaultMarketId: 1,
 
-    maxLevels: 25,
+    maxLevels: 5,
     maxOrders: 50,
   },
 
@@ -39,7 +39,7 @@ const NETWORKS = {
 
     defaultMarketId: 1,
 
-    maxLevels: 25,
+    maxLevels: 5,
     maxOrders: 50,
   },
 
@@ -58,7 +58,7 @@ const NETWORKS = {
 
     defaultMarketId: 1,
 
-    maxLevels: 25,
+    maxLevels: 5,
     maxOrders: 50,
   },
 };

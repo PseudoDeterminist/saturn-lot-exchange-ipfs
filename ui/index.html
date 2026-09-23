@@ -60,7 +60,9 @@
         </div>
       </header>
 
-      <section class="stats-strip">
+      <main class="layout">
+        <div class="market-column">
+<section class="stats-strip">
         <div
           class="stat"
           id="last-trade-stat"
@@ -114,9 +116,7 @@
           </span>
         </div>
       </section>
-
-      <main class="layout">
-        <section class="panel chart-panel">
+<section class="panel chart-panel">
           <header class="panel-header">
             <h2>Price action</h2>
 
@@ -174,77 +174,69 @@
             </div>
           </div>
         </section>
+<section class="panel bottom-panel">
+        <header class="panel-header split">
+          <div>
+            <h2>Orders &amp; tape</h2>
 
-        <section class="panel book-panel">
-          <header class="panel-header split">
-            <div>
-              <h2>Order book</h2>
-
-              <div class="panel-sub">
-                Best levels, FIFO inside tick
-              </div>
+            <div class="panel-sub">
+              Live book orders and recent trades
             </div>
+          </div>
 
+          <div
+            class="ticker"
+            id="last-update"
+          >
+            Last update: --
+          </div>
+        </header>
+
+        <div class="bottom-grid">
+          <div class="panel-section">
+            <h3>Open orders</h3>
+
+            <div
+              class="table"
+              id="open-orders"
+            ></div>
+          </div>
+
+          <div class="panel-section">
+            <h3>Recent trades</h3>
+
+            <div
+              class="table"
+              id="recent-trades"
+            ></div>
+          </div>
+        </div>
+      </section>
+        </div>
+        <aside class="trading-column" aria-label="Trading">
+<section class="panel book-panel">
+          <header class="panel-header book-header">
+            <div class="book-title-row">
+              <h2>Order book</h2>
+              <button class="btn ghost mini" id="refresh-btn">Refresh</button>
+            </div>
             <div class="book-controls">
               <label class="field-inline">
                 <span>Depth</span>
-
-                <input
-                  id="depth-input"
-                  type="number"
-                  min="1"
-                  max="200"
-                  value="25"
-                />
+                <input id="depth-input" type="number" min="1" max="200" value="5" />
               </label>
-
-              <div
-                class="depth-toggle"
-                id="depth-toggle"
-              >
-                <button
-                  class="chip active"
-                  data-depth="25"
-                >
-                  25
-                </button>
-
-                <button
-                  class="chip"
-                  data-depth="50"
-                >
-                  50
-                </button>
-
-                <button
-                  class="chip"
-                  data-depth="100"
-                >
-                  100
-                </button>
+              <div class="depth-toggle" id="depth-toggle">
+                <button class="chip active" data-depth="5">5</button>
+                <button class="chip" data-depth="10">10</button>
+                <button class="chip" data-depth="25">25</button>
               </div>
-
-              <button
-                class="btn ghost"
-                id="refresh-btn"
-              >
-                Refresh
-              </button>
-
-              <button
-                class="btn ghost"
-                id="seed-btn"
-              >
-                Seed
-              </button>
-
-              <button
-                class="btn ghost"
-                id="clear-btn"
-                disabled
-              >
-                Clear My Orders
-              </button>
+              <details class="book-actions">
+                <summary>Actions</summary>
+                <div class="book-actions-menu">
+                  <button class="btn ghost mini" id="seed-btn">Seed</button>
+                  <button class="btn ghost mini" id="clear-btn" disabled>Clear My Orders</button>
+                </div>
+              </details>
             </div>
           </header>
 
@@ -258,8 +250,6 @@
 
           <div class="stacked-book">
 
-            <div class="book-head sell">Sell</div>
-
             <div class="book-cols">
               <span class="col-tick">Tick</span>
               <span class="col-sep">·</span>
@@ -268,29 +258,19 @@
               <span class="col-total">Total</span>
             </div>
 
-            <div class="book-rows sell-rows" id="sell-book"></div>
+            <div class="book-rows sell-rows" id="sell-book" role="region" aria-label="Sell orders"></div>
 
             <div class="last-taken neutral" id="last-taken">
               <span class="last-taken-label">Last</span>
               <span class="last-taken-price" id="last-taken-price">--</span>
             </div>
 
-            <div class="book-rows buy-rows" id="buy-book"></div>
+            <div class="book-rows buy-rows" id="buy-book" role="region" aria-label="Buy orders"></div>
 
-            <div class="book-cols">
-              <span class="col-tick">Tick</span>
-              <span class="col-sep">·</span>
-              <span class="col-price">Price</span>
-              <span class="col-lots">Lots</span>
-              <span class="col-total">Total</span>
-            </div>
-
-            <div class="book-head buy">Buy</div>
 
           </div>
         </section>
-
-        <section class="panel ticket-panel">
+<section class="panel ticket-panel">
           <header class="panel-header split">
             <div>
               <h2>Order ticket</h2>
@@ -413,50 +393,13 @@
             </div>
           </div>
         </section>
+        </aside>
       </main>
-
-      <section class="panel bottom-panel">
-        <header class="panel-header split">
-          <div>
-            <h2>Orders &amp; tape</h2>
-
-            <div class="panel-sub">
-              Live book orders and recent trades
-            </div>
-          </div>
-
-          <div
-            class="ticker"
-            id="last-update"
-          >
-            Last update: --
-          </div>
-        </header>
-
-        <div class="bottom-grid">
-          <div class="panel-section">
-            <h3>Open orders</h3>
-
-            <div
-              class="table"
-              id="open-orders"
-            ></div>
-          </div>
-
-          <div class="panel-section">
-            <h3>Recent trades</h3>
-
-            <div
-              class="table"
-              id="recent-trades"
-            ></div>
-          </div>
-        </div>
-      </section>
     </div>
 
     <script src="./config.js"></script>
     <script src="./vendor/ethers.umd.min.js"></script>
+    <script src="./trade-history.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

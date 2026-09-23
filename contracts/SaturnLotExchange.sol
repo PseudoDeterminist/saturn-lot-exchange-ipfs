@@ -149,6 +149,7 @@ contract SaturnLotExchange {
         int256 lastTradeTick;
         uint256 lastTradePrice;
         uint256 lastTradeBlock;
+        bool lastTradeTakerIsBuy;
         int256 bestBuyTick;
         int256 bestSellTick;
 
@@ -310,6 +311,7 @@ contract SaturnLotExchange {
             int256 lastTradeTick,
             uint256 lastTradeBlock,
             uint256 lastTradePrice,
+            bool lastTradeTakerIsBuy,
             uint256 bookEscrowWETC,
             uint256 bookEscrowLots,
             uint256 bookAskLots,
@@ -327,6 +329,7 @@ contract SaturnLotExchange {
             mkt.lastTradeTick,
             mkt.lastTradeBlock,
             mkt.lastTradePrice,
+            mkt.lastTradeTakerIsBuy,
             mkt.bookEscrowWETC,
             mkt.bookEscrowLots,
             mkt.bookAskLots,
@@ -783,6 +786,7 @@ contract SaturnLotExchange {
         mkt.lastTradeBlock = block.number;
         mkt.lastTradeTick = t;
         mkt.lastTradePrice = price;
+        mkt.lastTradeTakerIsBuy = true;
 
         (seq, chain) = _emitSettled(
             marketId,
@@ -930,6 +934,7 @@ contract SaturnLotExchange {
         mkt.lastTradeTick = t;
         mkt.lastTradePrice = price;
         mkt.lastTradeBlock = block.number;
+        mkt.lastTradeTakerIsBuy = false;
 
         (seq, chain) = _emitSettled(
             marketId,

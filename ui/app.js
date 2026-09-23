@@ -1,4 +1,4 @@
-/* global ethers */
+/* global ethers, TradeHistory */
 const config = window.APP_CONFIG || {};
 
 const NETWORK_NAME = config.name || "Unknown";
@@ -9,17 +9,17 @@ const CONTRACT_ADDRESS = config.exchangeAddress || "";
 const WETC_ADDRESS = config.quoteTokenAddress || "";
 const DEFAULT_MARKET_ID = Number(config.defaultMarketId || 1);
 
-const MAX_LEVELS_DEFAULT = config.maxLevels || 25;
+const MAX_LEVELS_DEFAULT = config.maxLevels || 5;
 const MAX_ORDERS_DEFAULT = config.maxOrders || 50;
 const DEMO_MODE =
   new URLSearchParams(window.location.search).get("demo") === "1";
 
 const ABI = [
-  "event Trade(uint32 indexed marketId,uint64 seq,bytes32 newHash,uint64 indexed orderId,address taker,address indexed maker,bool takerIsBuy,int32 tick,uint96 pricePerLot,uint32 lotsFilled,uint128 valueFilled,uint32 lotsRemainingAfter,uint128 valueRemainingAfter)",
+  TradeHistory.TRADE_EVENT,
   "function marketCount() view returns (uint32)",
   "function marketIdOf(address lotToken) view returns (uint32)",
 
-  "function getMarket(uint32 marketId) view returns (address lotToken,bool exists,bool active,uint64 historySeq,bytes32 historyHash,int256 bestBuyTick,int256 bestSellTick,int256 lastTradeTick,uint256 lastTradeBlock,uint256 lastTradePrice,uint256 buyWETC,uint256 sellLots)",
+  "function getMarket(uint32 marketId) view returns (address lotToken,bool active,uint64 historySeq,bytes32 historyHash,int256 bestBuyTick,int256 bestSellTick,int256 lastTradeTick,uint256 lastTradeBlock,uint256 lastTradePrice,bool lastTradeTakerIsBuy,uint256 bookEscrowWETC,uint256 bookEscrowLots,uint256 bookAskLots,uint256 bookAskWETC)",
 
   "function getBuyBook(uint32 marketId,uint256 depth) view returns (tuple(int256 tick,uint256 price,uint256 totalLots,uint256 totalValue,uint256 orderCount)[] out,uint256 n)",
   "function getSellBook(uint32 marketId,uint256 depth) view returns (tuple(int256 tick,uint256 price,uint256 totalLots,uint256 totalValue,uint256 orderCount)[] out,uint256 n)",
@@ -113,11 +113,22 @@ const state = {
 
   lastTradeTick: null,
   lastTradeBlock: null,
-  tape: [],
+  tradeHistory: { status: "loading", trades: [], error: null },
 
   readSource: "wallet",
   readChainId: null,
 };
+
+const recentTrades = TradeHistory.create({
+  onChange(snapshot) {
+    state.tradeHistory = snapshot;
+    renderTape();
+  },
+});
+
+function loadRecentTrades() {
+  return recentTrades.start(state.readContract, state.readProvider, state.marketId);
+}
 
 function toNumber(value) {
   if (typeof value === "bigint") return Number(value);
@@ -219,8 +230,9 @@ async function safeCall(name, fn) {
 }
 
 function renderDemo() {
-  const buy = buildDemoBook("buy");
-  const sell = buildDemoBook("sell");
+  const depth = Number(el.depthInput.value) || MAX_LEVELS_DEFAULT;
+  const buy = buildDemoBook("buy").slice(0, depth);
+  const sell = buildDemoBook("sell").slice(0, depth);
   renderBook(el.buyBook, buy, "buy");
   renderBook(el.sellBook, sell, "sell");
   updateMidPrice(buy[0], sell[0]);
@@ -310,6 +322,7 @@ async function copyAddresses() {
 }
 
 async function initProvider() {
+  await recentTrades.stop();
   if (!window.ethereum) {
     throw new Error("No injected wallet provider found");
   }
@@ -346,8 +359,6 @@ async function discoverMarkets() {
 
   for (let marketId = 1; marketId <= count; marketId += 1) {
     const market = await state.readContract.getMarket(marketId);
-
-    if (!market.exists) continue;
 
     const token = new ethers.Contract(
       market.lotToken,
@@ -413,7 +424,9 @@ async function selectMarket(marketId) {
 
     state.lastTradeTick = null;
     state.lastTradeBlock = null;
-    state.tape = [];
+    await recentTrades.stop();
+    state.tradeHistory = { status: "loading", trades: [], error: null };
+    renderTape();
     renderLastTaken(null);
 
     await loadMarket(marketId);
@@ -427,6 +440,7 @@ async function selectMarket(marketId) {
 
     await refresh();
   } catch (err) {
+    reportTradeHistoryError(err);
     setTicketStatus(`Market load failed: ${errorMessage(err)}`);
   }
 }
@@ -435,10 +449,6 @@ async function loadMarket(marketId) {
   const market = await state.readContract.getMarket(marketId);
 
   const lotTokenAddress = market.lotToken;
-
-  if (!market.exists) {
-    throw new Error(`Market ${marketId} does not exist`);
-  }
 
   state.marketId = Number(marketId);
   state.lotTokenAddress = lotTokenAddress;
@@ -472,6 +482,7 @@ async function loadMarket(marketId) {
     el.addLotToken.textContent = `Add ${state.lotTokenSymbol}`;
   }
 
+  void loadRecentTrades().catch(reportTradeHistoryError);
   return market;
 }
 
@@ -483,6 +494,7 @@ async function connectWallet() {
   try {
     if (!state.walletProvider) {
       await initProvider();
+      await loadMarket(state.marketId);
     }
     await window.ethereum.request({ method: "eth_requestAccounts" });
     state.signer = await state.walletProvider.getSigner();
@@ -513,24 +525,6 @@ function renderLastTaken(price, takerIsBuy = null) {
     : takerIsBuy ? "buy" : "sell";
   el.lastTaken.className = `last-taken ${side}`;
   el.lastTakenPrice.textContent = price === null ? "--" : formatWetc(price);
-}
-
-async function getLastTakerSide(contract, marketId, market) {
-  if (market.lastTradeBlock === 0n) return null;
-  try {
-    // Restrict the query to this market's last execution block, including on reload.
-    const block = toNumber(market.lastTradeBlock);
-    const events = await contract.queryFilter(contract.filters.Trade(marketId), block, block);
-    const latest = events
-      .filter((event) => !event.removed)
-      .sort((a, b) => b.index - a.index)[0];
-    if (!latest || latest.args.tick !== market.lastTradeTick ||
-        latest.args.pricePerLot !== market.lastTradePrice) return null;
-    return latest.args.takerIsBuy;
-  } catch (err) {
-    console.warn("Last trade event unavailable:", err);
-    return null;
-  }
 }
 
 function renderBook(container, levels, side) {
@@ -590,6 +584,9 @@ function renderBook(container, levels, side) {
       `;
     })
     .join("");
+
+  // Keep the best ask adjacent to LAST when deeper levels need scrolling.
+  container.scrollTop = side === "sell" ? container.scrollHeight : 0;
 }
 
 function renderOrders(buyOrders, sellOrders) {
@@ -639,21 +636,15 @@ function renderOrders(buyOrders, sellOrders) {
     : '<div class="panel-sub">No open orders.</div>';
 }
 
+function reportTradeHistoryError(error) {
+  state.tradeHistory = { status: "error", trades: [], error };
+  renderTape();
+}
+
 function renderTape() {
-  const entries = state.tape.slice(0, 10);
-  el.recentTrades.innerHTML = entries.length
-    ? entries
-        .map(
-          (trade) => `
-        <div class="table-row">
-          <span>${trade.side.toUpperCase()}</span>
-          <span>${formatTick(trade.tick)} @ ${formatWetc(trade.price)}</span>
-          <span>${formatLots(trade.lots)} lots</span>
-        </div>
-      `,
-        )
-        .join("")
-    : '<div class="panel-sub">No trades yet.</div>';
+  el.recentTrades.innerHTML = TradeHistory.render(state.tradeHistory, {
+    formatTick, formatWetc, formatLots,
+  });
 }
 
 function updateChart(buy, sell) {
@@ -744,7 +735,6 @@ async function refresh() {
     const [buyBook, buyN] = buyRes.value;
     const [sellBook, sellN] = sellRes.value;
     const market = marketRes.value;
-    const takerIsBuy = await getLastTakerSide(state.readContract, marketId, market);
     if (marketId !== state.marketId) return;
 
     const [buyOrdersRes, sellOrdersRes] = await Promise.all([
@@ -780,8 +770,8 @@ async function refresh() {
     const lastTradeTick = market.lastTradeTick;
     const lastTradeBlock = market.lastTradeBlock;
     const lastTradePrice = market.lastTradePrice;
-    const buyWETC = market.buyWETC;
-    const sellLots = market.sellLots;
+    const buyWETC = market.bookEscrowWETC;
+    const sellLots = market.bookEscrowLots;
 
     setStatus(market.active ? "Live" : "Paused", market.active);
 
@@ -818,7 +808,7 @@ async function refresh() {
         : `${formatTick(bestSellTick)} @ ${formatWetc(sellLevels[0].price)}`;
 
     const hasTrade = lastTradeBlock !== 0n;
-    renderLastTaken(hasTrade ? lastTradePrice : null, takerIsBuy);
+    renderLastTaken(hasTrade ? lastTradePrice : null, market.lastTradeTakerIsBuy);
 
     el.lastTrade.textContent = hasTrade
       ? `${formatTick(lastTradeTick)} @ ${formatWetc(lastTradePrice)}`
@@ -843,13 +833,6 @@ async function refresh() {
       hasTrade;
 
     if (tradeUpdated) {
-      state.tape.unshift({
-        side: "trade",
-        tick: lastTradeTick,
-        price: lastTradePrice,
-        lots: 1n,
-      });
-
       pulse(el.lastTradeStat);
       pulse(el.statusPill);
     }
@@ -1078,13 +1061,12 @@ async function seedOrders() {
 
 function bindEvents() {
   if (window.ethereum) {
-    window.ethereum.on("chainChanged", () => {
-      window.location.reload();
-    });
-
-    window.ethereum.on("accountsChanged", () => {
-      window.location.reload();
-    });
+    const reloadWallet = async () => {
+      try { await recentTrades.stop(); }
+      finally { window.location.reload(); }
+    };
+    window.ethereum.on("chainChanged", reloadWallet);
+    window.ethereum.on("accountsChanged", reloadWallet);
   }
 
   el.connectBtn.addEventListener("click", connectWallet);
@@ -1105,7 +1087,12 @@ function bindEvents() {
       ),
     );
   }
-  el.refreshBtn.addEventListener("click", refresh);
+  el.refreshBtn.addEventListener("click", () => {
+    refresh();
+    if (state.readContract && state.tradeHistory.status === "error") {
+      void loadRecentTrades().catch(reportTradeHistoryError);
+    }
+  });
   el.previewBtn.addEventListener("click", previewOrder);
   el.placeBtn.addEventListener("click", placeOrder);
   el.depthInput.addEventListener("change", () => {
@@ -1195,6 +1182,7 @@ async function waitForExpectedChain(timeoutMs = 5000) {
 
 async function boot() {
   bindEvents();
+  renderTape();
 
   el.depthInput.value = MAX_LEVELS_DEFAULT.toString();
   updateDepthToggle(MAX_LEVELS_DEFAULT);
@@ -1225,6 +1213,7 @@ async function boot() {
     await loadMarket(DEFAULT_MARKET_ID);
     await discoverMarkets();
   } catch (err) {
+    reportTradeHistoryError(err);
     setDemoMode(err.message || `Unable to connect to ${NETWORK_NAME}`);
     return;
   }
