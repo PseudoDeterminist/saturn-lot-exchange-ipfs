@@ -220,7 +220,7 @@ async function main() {
   const exchange =
     await SaturnLotExchange.deploy(wetc.target);
 
-  await waitForReceipt(
+  const deploymentReceipt = await waitForReceipt(
     exchange.deploymentTransaction(),
     "SaturnLotExchange deploy"
   );
@@ -288,6 +288,7 @@ async function main() {
     STRN10K_ADDRESS: strn10k.target,
     TESTLOT_ADDRESS: testLot.target,
     SATURN_LOT_EXCHANGE_ADDRESS: exchange.target,
+    EXCHANGE_DEPLOYMENT_BLOCK: deploymentReceipt.blockNumber,
     STRN10K_MARKET_ID: strn10kMarketId.toString(),
     TESTLOT_MARKET_ID: testLotMarketId.toString()
   };

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 /*
-  Saturn Lot Exchange v0.8.2 (Atomic Quote Replacement)
+  Saturn Lot Exchange v0.7.1 (Multi-Market + Taker Fee Design)
   By PseudoDeterminist
 
   One WETC quote token, many DAO/owner-approved Lot Token markets.
@@ -23,15 +23,16 @@ contract SaturnLotExchange is ReentrancyGuard {
     // Prices span 0.1 .. 9950 WETC per Lot.
     int32 private constant MIN_TICK = -464;
     int32 private constant MAX_TICK = 1855;
+    uint32 private constant MAX_LOTS = 100000;
+
     int32 private constant NONE32 = type(int32).min;
     int256 private constant NONE256 = int256(NONE32);
 
-    // Bound batch calldata/work so maker convenience never creates an
-    // unexpectedly huge single transaction. cancelMany has its own larger cap.
-    uint256 public constant MAX_PLACE_BATCH = 32;
-    uint256 public constant MAX_CANCEL_BATCH = 128;
-
     IERC20 public immutable WETC; // shared quote token for every market
+
+    uint256 private constant ETC_MAINNET_CHAIN_ID = 61;
+    address private constant ETC_MAINNET_WETC =
+        0x82A618305706B14e7bcf2592D4B9324A366b6dAd;
 
     address public owner;
 
@@ -40,6 +41,12 @@ contract SaturnLotExchange is ReentrancyGuard {
     uint16 public constant MAX_TAKER_FEE_BPS = 50; // governance can never exceed 0.50%
     uint16 public takerFeeBps;                     // 0 at deployment; owner/DAO may set later
     address public feeTreasury;                    // receives WETC fees immediately after each FOK
+
+    // Event type tags used in each market-local integrity hash chain.
+    uint8 private constant EVT_PLACE      = 1;
+    uint8 private constant EVT_CANCEL     = 2;
+    uint8 private constant EVT_TRADE      = 3;
+    uint8 private constant EVT_SETTLEMENT = 4;
 
     /* -------------------- Events -------------------- */
 
@@ -70,43 +77,59 @@ contract SaturnLotExchange is ReentrancyGuard {
 
     event OrderPlaced(
         uint32 indexed marketId,
+        uint64 seq,
+        bytes32 newHash,
         uint64 indexed orderId,
         address indexed owner,
         bool isBuy,
         int32 tick,
-        uint32 lots
+        uint32 lots,
+        uint128 value
     );
 
     event OrderCanceled(
         uint32 indexed marketId,
+        uint64 seq,
+        bytes32 newHash,
         uint64 indexed orderId,
         address indexed owner,
         bool isBuy,
         int32 tick,
-        uint32 lotsCanceled
+        uint32 lotsCanceled,
+        uint128 valueCanceled
     );
 
     // One Trade event per maker fill (FOK taker may generate multiple).
-    // Price and value are exactly derivable from tick and lots.
     event Trade(
         uint32 indexed marketId,
+        uint64 seq,
+        bytes32 newHash,
         uint64 indexed orderId,
         address taker,
         address indexed maker,
         bool takerIsBuy,
         int32 tick,
+        uint96 pricePerLot,
         uint32 lotsFilled,
-        uint32 lotsRemainingAfter
+        uint128 valueFilled,
+        uint32 lotsRemainingAfter,
+        uint128 valueRemainingAfter
     );
 
-    // One aggregate settlement event per successful FOK.
+    // One aggregate settlement event per successful FOK. This event is included
+    // in the market-local integrity hash chain after all maker-fill Trade events.
+    // takerWETC is total WETC paid by a buy taker (gross + fee), or net WETC
+    // received by a sell taker (gross - fee).
     event FOKSettled(
         uint32 indexed marketId,
+        uint64 seq,
+        bytes32 newHash,
         address indexed taker,
         bool takerIsBuy,
         uint32 lots,
         uint128 grossWETC,
-        uint128 feeWETC
+        uint128 feeWETC,
+        uint128 takerWETC
     );
 
     /* -------------------- Order book data -------------------- */
@@ -117,33 +140,44 @@ contract SaturnLotExchange is ReentrancyGuard {
         int32 tick;
         uint32 lotsRemaining;
         bool isBuy;
+        uint128 valueRemaining;
         uint64 prev;
         uint64 next;
     }
 
     struct TickLevel {
+        uint96 price;
         int32 prev;
         int32 next;
         uint32 orderCount;
         uint64 head;
         uint64 tail;
         uint64 totalLots;
+        uint128 totalValue;
     }
 
     struct Market {
         address lotToken;
+        bool exists;
         bool active;
 
-        // Market-local last trade / top of book.
+        // Market-local event integrity chain.
+        uint64 historySeq;
+        bytes32 historyHash;
+
+        // Market-local oracle / top of book.
         int256 lastTradeTick;
+        uint256 lastTradePrice;
         uint256 lastTradeBlock;
         bool lastTradeTakerIsBuy;
         int256 bestBuyTick;
         int256 bestSellTick;
 
-        // Directly queryable escrow totals.
+        // Market-local accounting totals.
         uint256 bookEscrowWETC;
         uint256 bookEscrowLots;
+        uint256 bookAskLots;
+        uint256 bookAskWETC;
 
         // Sparse linked tick lists for this market only.
         mapping(int256 => TickLevel) buyLevels;
@@ -193,7 +227,7 @@ contract SaturnLotExchange is ReentrancyGuard {
         hex"0af70b050b130b210b2f0b3e0b4c0b5a0b690b770b860b950ba30bb20bc10bd0"
         hex"0bdf0bee0bfe0c0d0c1c0c2c0c3b0c4b0c5a0c6a0c7a0c8a0c9a0caa0cba0cca"
         hex"0cda0ceb0cfb0d0c0d1c0d2d0d3e0d4f0d600d710d820d930da40db60dc70dd9"
-        hex"0dea0dfc0e0e0e200e320e440e560e680e7b0e8d0e9f0eb20ec50ed80eeb0efe"
+        hex"0dea0dfc0e0e200e320e440e560e680e7b0e8d0e9f0eb20ec50ed80eeb0efe"
         hex"0f110f240f370f4a0f5e0f720f850f990fad0fc10fd50fe90ffd10121026103b"
         hex"104f10641079108e10a310b810ce10e310f8110e1124113a11501166117c1192"
         hex"11a811bf11d511ec1203121a12311248125f1277128e12a612be12d612ee1306"
@@ -201,16 +235,19 @@ contract SaturnLotExchange is ReentrancyGuard {
         hex"14b214cd14e71502151d15371552156e158915a415c015dc15f716131630164c"
         hex"1668168516a116be16db16f8171617331750176e178c17aa17c817e618051823"
         hex"184218611880189f18bf18de18fe191e193e195e197e199f19bf19e01a011a22"
-        hex"1a431a651a861aa81aca1aec1b0f1b311b541b761b991bbd1be01c031c271c4b"
+        hex"1a431a651aa81aca1aec1b0f1b311b541b761b991bbd1be01c031c271c4b"
         hex"1c6f1c931cb81cdc1d011d261d4b1d701d961dbb1de11e071e2e1e541e7b1ea1"
         hex"1ec81ef01f171f3f1f661f8e1fb71fdf200820302059208320ac20d620ff2129"
         hex"2154217e21a921d421ff222a2256228122ad22d923062332235f238c23b923e7"
         hex"241524432471249f24ce24fd252c255b258b25bb25eb261b264b267c26ad26de";
 
-
     constructor(address wetcToken) {
-        require(wetcToken != address(0), "zero WETC");
-        WETC = IERC20(wetcToken);
+        if (block.chainid == ETC_MAINNET_CHAIN_ID) {
+            WETC = IERC20(ETC_MAINNET_WETC);
+        } else {
+            require(wetcToken != address(0), "zero WETC");
+            WETC = IERC20(wetcToken);
+        }
 
         owner = msg.sender;
         feeTreasury = msg.sender;
@@ -228,6 +265,7 @@ contract SaturnLotExchange is ReentrancyGuard {
 
     function transferOwnership(address newOwner)
         external
+        nonReentrant
         onlyOwner
     {
         require(newOwner != address(0), "zero owner");
@@ -240,6 +278,7 @@ contract SaturnLotExchange is ReentrancyGuard {
 
     function setTakerFeeBps(uint16 newFeeBps)
         external
+        nonReentrant
         onlyOwner
     {
         require(newFeeBps <= MAX_TAKER_FEE_BPS, "fee too high");
@@ -252,6 +291,7 @@ contract SaturnLotExchange is ReentrancyGuard {
 
     function setFeeTreasury(address newTreasury)
         external
+        nonReentrant
         onlyOwner
     {
         require(newTreasury != address(0), "zero treasury");
@@ -263,9 +303,10 @@ contract SaturnLotExchange is ReentrancyGuard {
     }
 
     /// @notice Approve a Lot Token for trading. Re-approving a retired token
-    ///         reactivates its original market and preserves its order book state.
+    ///         reactivates its original market and preserves its history.
     function approveMarket(address lotToken)
         external
+        nonReentrant
         onlyOwner
         returns (uint32 marketId)
     {
@@ -280,6 +321,7 @@ contract SaturnLotExchange is ReentrancyGuard {
             Market storage mkt = markets[marketId];
 
             mkt.lotToken = lotToken;
+            mkt.exists = true;
             mkt.active = true;
             mkt.bestBuyTick = NONE256;
             mkt.bestSellTick = NONE256;
@@ -288,7 +330,7 @@ contract SaturnLotExchange is ReentrancyGuard {
         } else {
             Market storage mkt = markets[marketId];
 
-            require(mkt.lotToken != address(0), "invalid market");
+            require(mkt.exists, "invalid market");
             require(!mkt.active, "market already active");
 
             mkt.active = true;
@@ -300,6 +342,7 @@ contract SaturnLotExchange is ReentrancyGuard {
     /// @notice Stop new orders and taker trades. Existing makers can still cancel.
     function unapproveMarket(uint32 marketId)
         external
+        nonReentrant
         onlyOwner
     {
         Market storage mkt = _market(marketId);
@@ -317,6 +360,8 @@ contract SaturnLotExchange is ReentrancyGuard {
         returns (
             address lotToken,
             bool active,
+            uint64 historySeq,
+            bytes32 historyHash,
             int256 bestBuyTick,
             int256 bestSellTick,
             int256 lastTradeTick,
@@ -324,27 +369,28 @@ contract SaturnLotExchange is ReentrancyGuard {
             uint256 lastTradePrice,
             bool lastTradeTakerIsBuy,
             uint256 bookEscrowWETC,
-            uint256 bookEscrowLots
+            uint256 bookEscrowLots,
+            uint256 bookAskLots,
+            uint256 bookAskWETC
         )
     {
-        Market storage mkt = _market(marketId);
-
-        uint256 lastPrice =
-            mkt.lastTradeBlock == 0
-                ? 0
-                : priceAtTick(mkt.lastTradeTick);
+        Market storage mkt = _marketView(marketId);
 
         return (
             mkt.lotToken,
             mkt.active,
+            mkt.historySeq,
+            mkt.historyHash,
             mkt.bestBuyTick,
             mkt.bestSellTick,
             mkt.lastTradeTick,
             mkt.lastTradeBlock,
-            lastPrice,
+            mkt.lastTradePrice,
             mkt.lastTradeTakerIsBuy,
             mkt.bookEscrowWETC,
-            mkt.bookEscrowLots
+            mkt.bookEscrowLots,
+            mkt.bookAskLots,
+            mkt.bookAskWETC
         );
     }
 
@@ -400,7 +446,228 @@ contract SaturnLotExchange is ReentrancyGuard {
         return int32(tick);
     }
 
-    /* -------------------- Fee / token helpers -------------------- */
+    /* -------------------- Hash chain helpers -------------------- */
+
+    function _chainHash(
+        bytes32 chain,
+        bytes32 recordHash
+    )
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encodePacked(chain, recordHash)
+        );
+    }
+
+    function _emitPlaced(
+        uint32 marketId,
+        uint64 seq,
+        bytes32 chain,
+        uint64 orderId,
+        address orderOwner,
+        bool isBuy,
+        int32 tick,
+        uint32 lots,
+        uint128 value
+    )
+        internal
+        returns (uint64, bytes32)
+    {
+        unchecked {
+            ++seq;
+        }
+
+        bytes32 rec = keccak256(
+            abi.encode(
+                EVT_PLACE,
+                marketId,
+                seq,
+                orderId,
+                orderOwner,
+                isBuy,
+                tick,
+                lots,
+                value
+            )
+        );
+
+        bytes32 newHash = _chainHash(chain, rec);
+
+        emit OrderPlaced(
+            marketId,
+            seq,
+            newHash,
+            orderId,
+            orderOwner,
+            isBuy,
+            tick,
+            lots,
+            value
+        );
+
+        return (seq, newHash);
+    }
+
+    function _emitCanceled(
+        uint32 marketId,
+        uint64 seq,
+        bytes32 chain,
+        uint64 orderId,
+        address orderOwner,
+        bool isBuy,
+        int32 tick,
+        uint32 lotsCanceled,
+        uint128 valueCanceled
+    )
+        internal
+        returns (uint64, bytes32)
+    {
+        unchecked {
+            ++seq;
+        }
+
+        bytes32 rec = keccak256(
+            abi.encode(
+                EVT_CANCEL,
+                marketId,
+                seq,
+                orderId,
+                orderOwner,
+                isBuy,
+                tick,
+                lotsCanceled,
+                valueCanceled
+            )
+        );
+
+        bytes32 newHash = _chainHash(chain, rec);
+
+        emit OrderCanceled(
+            marketId,
+            seq,
+            newHash,
+            orderId,
+            orderOwner,
+            isBuy,
+            tick,
+            lotsCanceled,
+            valueCanceled
+        );
+
+        return (seq, newHash);
+    }
+
+    function _emitTrade(
+        uint32 marketId,
+        uint64 seq,
+        bytes32 chain,
+        uint64 orderId,
+        address taker,
+        address maker,
+        bool takerIsBuy,
+        int32 tick,
+        uint96 pricePerLot,
+        uint32 lotsFilled,
+        uint128 valueFilled,
+        uint32 lotsRemainingAfter,
+        uint128 valueRemainingAfter
+    )
+        internal
+        returns (uint64, bytes32)
+    {
+        unchecked {
+            ++seq;
+        }
+
+        bytes32 rec = keccak256(
+            abi.encode(
+                EVT_TRADE,
+                marketId,
+                seq,
+                orderId,
+                taker,
+                maker,
+                takerIsBuy,
+                tick,
+                pricePerLot,
+                lotsFilled,
+                valueFilled,
+                lotsRemainingAfter,
+                valueRemainingAfter
+            )
+        );
+
+        bytes32 newHash = _chainHash(chain, rec);
+
+        emit Trade(
+            marketId,
+            seq,
+            newHash,
+            orderId,
+            taker,
+            maker,
+            takerIsBuy,
+            tick,
+            pricePerLot,
+            lotsFilled,
+            valueFilled,
+            lotsRemainingAfter,
+            valueRemainingAfter
+        );
+
+        return (seq, newHash);
+    }
+
+    function _emitSettled(
+        uint32 marketId,
+        uint64 seq,
+        bytes32 chain,
+        address taker,
+        bool takerIsBuy,
+        uint32 lots,
+        uint128 grossWETC,
+        uint128 feeWETC,
+        uint128 takerWETC
+    )
+        internal
+        returns (uint64, bytes32)
+    {
+        unchecked {
+            ++seq;
+        }
+
+        bytes32 rec = keccak256(
+            abi.encode(
+                EVT_SETTLEMENT,
+                marketId,
+                seq,
+                taker,
+                takerIsBuy,
+                lots,
+                grossWETC,
+                feeWETC,
+                takerWETC
+            )
+        );
+
+        bytes32 newHash = _chainHash(chain, rec);
+
+        emit FOKSettled(
+            marketId,
+            seq,
+            newHash,
+            taker,
+            takerIsBuy,
+            lots,
+            grossWETC,
+            feeWETC,
+            takerWETC
+        );
+
+        return (seq, newHash);
+    }
 
     function _takerFee(uint256 grossWETC)
         internal
@@ -448,178 +715,30 @@ contract SaturnLotExchange is ReentrancyGuard {
         nonReentrant
         returns (uint64 id)
     {
-        Market storage mkt = _activeMarket(marketId);
-        (int32 t, uint32 lots32, uint256 cost) =
-            _validateBuyOrder(mkt, tick, lots);
-
-        WETC.safeTransferFrom(
-            msg.sender,
-            address(this),
-            cost
-        );
-
-        id = _placeBuyEscrowed(
-            mkt,
+        return _placeBuy(
             marketId,
-            t,
-            lots32
+            tick,
+            lots
         );
-
-        mkt.bookEscrowWETC += cost;
     }
 
-    /// @notice Atomically place several buy orders in one market.
-    ///         Array order determines FIFO priority for orders at the same tick.
-    ///         WETC is pulled once for the aggregate cost.
-    function placeBuyBatch(
+    function _placeBuy(
         uint32 marketId,
-        int256[] calldata ticks,
-        uint256[] calldata lots
-    )
-        external
-        nonReentrant
-        returns (uint64[] memory ids)
-    {
-        uint256 n = ticks.length;
-        require(n != 0 && n <= MAX_PLACE_BATCH, "invalid batch size");
-        require(lots.length == n, "batch length mismatch");
-
-        Market storage mkt = _activeMarket(marketId);
-        int32[] memory validatedTicks = new int32[](n);
-        uint32[] memory validatedLots = new uint32[](n);
-        uint256 totalCost;
-
-        // Validate every order and calculate the exact aggregate escrow before
-        // making any external token call or mutating the book.
-        for (uint256 i; i < n; ++i) {
-            (int32 t, uint32 lots32, uint256 cost) =
-                _validateBuyOrder(mkt, ticks[i], lots[i]);
-            validatedTicks[i] = t;
-            validatedLots[i] = lots32;
-            totalCost += cost;
-        }
-
-        WETC.safeTransferFrom(
-            msg.sender,
-            address(this),
-            totalCost
-        );
-
-        ids = new uint64[](n);
-        for (uint256 i; i < n; ++i) {
-            ids[i] = _placeBuyEscrowed(
-                mkt,
-                marketId,
-                validatedTicks[i],
-                validatedLots[i]
-            );
-        }
-
-        mkt.bookEscrowWETC += totalCost;
-    }
-
-
-
-    /// @notice Atomically replace caller-owned buy orders in one market with a
-    ///         new buy ladder. Old escrow is reused and only the net WETC
-    ///         difference is transferred. Replacement orders receive new IDs
-    ///         and normal tail-of-tick FIFO priority.
-    function replaceBuyBatch(
-        uint32 marketId,
-        uint64[] calldata cancelIds,
-        int256[] calldata ticks,
-        uint256[] calldata lots
-    )
-        external
-        nonReentrant
-        returns (uint64[] memory ids)
-    {
-        uint256 cancelN = cancelIds.length;
-        uint256 placeN = ticks.length;
-        require(cancelN != 0 && cancelN <= MAX_CANCEL_BATCH, "invalid cancel batch size");
-        require(placeN != 0 && placeN <= MAX_PLACE_BATCH, "invalid place batch size");
-        require(lots.length == placeN, "batch length mismatch");
-
-        Market storage mkt = _activeMarket(marketId);
-        uint256 releasedWETC;
-
-        // Validate the complete cancel set and calculate reusable escrow before
-        // mutating state. The actual removal loop rechecks ownership/market/side,
-        // so duplicate IDs also revert atomically.
-        for (uint256 i; i < cancelN; ++i) {
-            Order storage o = orders[cancelIds[i]];
-            require(o.owner == msg.sender, "not order owner");
-            require(o.marketId == marketId, "wrong market");
-            require(o.isBuy, "wrong order side");
-            releasedWETC += uint256(o.lotsRemaining) * priceAtTick(o.tick);
-        }
-
-        int32[] memory validatedTicks = new int32[](placeN);
-        uint32[] memory validatedLots = new uint32[](placeN);
-        uint256 newWETC;
-
-        for (uint256 i; i < placeN; ++i) {
-            (int32 t, uint32 lots32, uint256 cost) =
-                _validateBuyOrder(mkt, ticks[i], lots[i]);
-            validatedTicks[i] = t;
-            validatedLots[i] = lots32;
-            newWETC += cost;
-        }
-
-        // If the new ladder needs more quote escrow, pull only the difference.
-        if (newWETC > releasedWETC) {
-            WETC.safeTransferFrom(
-                msg.sender,
-                address(this),
-                newWETC - releasedWETC
-            );
-        }
-
-        for (uint256 i; i < cancelN; ++i) {
-            _removeOwnedOrderNoTransfer(cancelIds[i], marketId, true);
-        }
-
-        ids = new uint64[](placeN);
-        for (uint256 i; i < placeN; ++i) {
-            ids[i] = _placeBuyEscrowed(
-                mkt,
-                marketId,
-                validatedTicks[i],
-                validatedLots[i]
-            );
-        }
-
-        mkt.bookEscrowWETC =
-            mkt.bookEscrowWETC - releasedWETC + newWETC;
-
-        // If the new ladder needs less quote escrow, refund only the difference.
-        if (releasedWETC > newWETC) {
-            WETC.safeTransfer(
-                msg.sender,
-                releasedWETC - newWETC
-            );
-        }
-    }
-
-    function _validateBuyOrder(
-        Market storage mkt,
         int256 tick,
         uint256 lots
     )
         internal
-        view
-        returns (
-            int32 t,
-            uint32 lots32,
-            uint256 cost
-        )
+        returns (uint64 id)
     {
+        Market storage mkt =
+            _activeMarket(marketId);
+
         require(
-            lots > 0 && lots <= type(uint32).max,
+            lots > 0 && lots <= MAX_LOTS,
             "invalid lots"
         );
 
-        t = _toTick(tick);
+        int32 t = _toTick(tick);
 
         require(
             mkt.bestSellTick == NONE256
@@ -627,39 +746,81 @@ contract SaturnLotExchange is ReentrancyGuard {
             "crossing sell book -- consider buyFOK"
         );
 
-        lots32 = uint32(lots);
-        cost = uint256(lots32) * priceAtTick(tick);
-    }
+        uint64 seq = mkt.historySeq;
+        bytes32 chain = mkt.historyHash;
 
-    function _placeBuyEscrowed(
-        Market storage mkt,
-        uint32 marketId,
-        int32 tick,
-        uint32 lots
-    )
-        internal
-        returns (uint64 id)
-    {
+        uint32 lots32 = uint32(lots);
+
+        uint96 price =
+            uint96(priceAtTick(tick));
+
+        uint256 cost =
+            uint256(lots32)
+            * uint256(price);
+
+        WETC.safeTransferFrom(
+            msg.sender,
+            address(this),
+            cost
+        );
+
         id = _newOrder(
             marketId,
             true,
-            tick,
-            lots
+            t,
+            lots32,
+            uint128(cost)
         );
 
         _enqueue(
             mkt,
             true,
-            tick,
-            lots,
+            t,
+            price,
+            lots32,
+            uint128(cost),
             id
         );
 
-        emit OrderPlaced(
+        mkt.bookEscrowWETC += cost;
+        mkt.bookAskLots += lots32;
+
+        (seq, chain) = _emitPlaced(
             marketId,
+            seq,
+            chain,
             id,
             msg.sender,
             true,
+            t,
+            lots32,
+            uint128(cost)
+        );
+
+        mkt.historySeq = seq;
+        mkt.historyHash = chain;
+    }
+
+    function placeBuy(
+        uint32 marketId,
+        int256 tick,
+        uint256 lots,
+        bytes32 expectedHash
+    )
+        external
+        nonReentrant
+        returns (uint64 id)
+    {
+        Market storage mkt =
+            _activeMarket(marketId);
+
+        require(
+            mkt.historyHash == expectedHash,
+            "stale hash"
+        );
+
+        return _placeBuy(
+            marketId,
             tick,
             lots
         );
@@ -674,174 +835,30 @@ contract SaturnLotExchange is ReentrancyGuard {
         nonReentrant
         returns (uint64 id)
     {
-        Market storage mkt = _activeMarket(marketId);
-        (int32 t, uint32 lots32) =
-            _validateSellOrder(mkt, tick, lots);
-
-        _pullExact(
-            IERC20(mkt.lotToken),
-            msg.sender,
-            uint256(lots32)
-        );
-
-        id = _placeSellEscrowed(
-            mkt,
+        return _placeSell(
             marketId,
-            t,
-            lots32
+            tick,
+            lots
         );
-
-        mkt.bookEscrowLots += lots32;
     }
 
-    /// @notice Atomically place several sell orders in one market.
-    ///         Array order determines FIFO priority for orders at the same tick.
-    ///         Lot Tokens are pulled once for the aggregate lot count.
-    function placeSellBatch(
+    function _placeSell(
         uint32 marketId,
-        int256[] calldata ticks,
-        uint256[] calldata lots
-    )
-        external
-        nonReentrant
-        returns (uint64[] memory ids)
-    {
-        uint256 n = ticks.length;
-        require(n != 0 && n <= MAX_PLACE_BATCH, "invalid batch size");
-        require(lots.length == n, "batch length mismatch");
-
-        Market storage mkt = _activeMarket(marketId);
-        int32[] memory validatedTicks = new int32[](n);
-        uint32[] memory validatedLots = new uint32[](n);
-        uint256 totalLots;
-
-        for (uint256 i; i < n; ++i) {
-            (int32 t, uint32 lots32) =
-                _validateSellOrder(mkt, ticks[i], lots[i]);
-            validatedTicks[i] = t;
-            validatedLots[i] = lots32;
-            totalLots += lots32;
-        }
-
-        _pullExact(
-            IERC20(mkt.lotToken),
-            msg.sender,
-            totalLots
-        );
-
-        ids = new uint64[](n);
-        for (uint256 i; i < n; ++i) {
-            ids[i] = _placeSellEscrowed(
-                mkt,
-                marketId,
-                validatedTicks[i],
-                validatedLots[i]
-            );
-        }
-
-        mkt.bookEscrowLots += totalLots;
-    }
-
-
-
-    /// @notice Atomically replace caller-owned sell orders in one market with a
-    ///         new sell ladder. Old Lot Token escrow is reused and only the net
-    ///         token difference is transferred. Replacement orders receive new
-    ///         IDs and normal tail-of-tick FIFO priority.
-    function replaceSellBatch(
-        uint32 marketId,
-        uint64[] calldata cancelIds,
-        int256[] calldata ticks,
-        uint256[] calldata lots
-    )
-        external
-        nonReentrant
-        returns (uint64[] memory ids)
-    {
-        uint256 cancelN = cancelIds.length;
-        uint256 placeN = ticks.length;
-        require(cancelN != 0 && cancelN <= MAX_CANCEL_BATCH, "invalid cancel batch size");
-        require(placeN != 0 && placeN <= MAX_PLACE_BATCH, "invalid place batch size");
-        require(lots.length == placeN, "batch length mismatch");
-
-        Market storage mkt = _activeMarket(marketId);
-        uint256 releasedLots;
-
-        for (uint256 i; i < cancelN; ++i) {
-            Order storage o = orders[cancelIds[i]];
-            require(o.owner == msg.sender, "not order owner");
-            require(o.marketId == marketId, "wrong market");
-            require(!o.isBuy, "wrong order side");
-            releasedLots += o.lotsRemaining;
-        }
-
-        int32[] memory validatedTicks = new int32[](placeN);
-        uint32[] memory validatedLots = new uint32[](placeN);
-        uint256 newLots;
-
-        for (uint256 i; i < placeN; ++i) {
-            (int32 t, uint32 lots32) =
-                _validateSellOrder(mkt, ticks[i], lots[i]);
-            validatedTicks[i] = t;
-            validatedLots[i] = lots32;
-            newLots += lots32;
-        }
-
-        IERC20 lotToken = IERC20(mkt.lotToken);
-
-        // If the new ladder is larger, pull only the additional Lot Tokens.
-        if (newLots > releasedLots) {
-            _pullExact(
-                lotToken,
-                msg.sender,
-                newLots - releasedLots
-            );
-        }
-
-        for (uint256 i; i < cancelN; ++i) {
-            _removeOwnedOrderNoTransfer(cancelIds[i], marketId, false);
-        }
-
-        ids = new uint64[](placeN);
-        for (uint256 i; i < placeN; ++i) {
-            ids[i] = _placeSellEscrowed(
-                mkt,
-                marketId,
-                validatedTicks[i],
-                validatedLots[i]
-            );
-        }
-
-        mkt.bookEscrowLots =
-            mkt.bookEscrowLots - releasedLots + newLots;
-
-        // If the new ladder is smaller, refund only the excess Lot Tokens.
-        if (releasedLots > newLots) {
-            lotToken.safeTransfer(
-                msg.sender,
-                releasedLots - newLots
-            );
-        }
-    }
-
-    function _validateSellOrder(
-        Market storage mkt,
         int256 tick,
         uint256 lots
     )
         internal
-        view
-        returns (
-            int32 t,
-            uint32 lots32
-        )
+        returns (uint64 id)
     {
+        Market storage mkt =
+            _activeMarket(marketId);
+
         require(
-            lots > 0 && lots <= type(uint32).max,
+            lots > 0 && lots <= MAX_LOTS,
             "invalid lots"
         );
 
-        t = _toTick(tick);
+        int32 t = _toTick(tick);
 
         require(
             mkt.bestBuyTick == NONE256
@@ -849,107 +866,89 @@ contract SaturnLotExchange is ReentrancyGuard {
             "crossing buy book -- consider sellFOK"
         );
 
-        lots32 = uint32(lots);
-    }
+        uint64 seq = mkt.historySeq;
+        bytes32 chain = mkt.historyHash;
 
-    function _placeSellEscrowed(
-        Market storage mkt,
-        uint32 marketId,
-        int32 tick,
-        uint32 lots
-    )
-        internal
-        returns (uint64 id)
-    {
+        uint32 lots32 = uint32(lots);
+
+        _pullExact(
+            IERC20(mkt.lotToken),
+            msg.sender,
+            uint256(lots32)
+        );
+
+        uint96 price =
+            uint96(priceAtTick(tick));
+
+        uint256 value =
+            uint256(lots32)
+            * uint256(price);
+
         id = _newOrder(
             marketId,
             false,
-            tick,
-            lots
+            t,
+            lots32,
+            uint128(value)
         );
 
         _enqueue(
             mkt,
             false,
-            tick,
-            lots,
+            t,
+            price,
+            lots32,
+            uint128(value),
             id
         );
 
-        emit OrderPlaced(
+        mkt.bookEscrowLots += lots32;
+        mkt.bookAskWETC += value;
+
+        (seq, chain) = _emitPlaced(
             marketId,
+            seq,
+            chain,
             id,
             msg.sender,
             false,
+            t,
+            lots32,
+            uint128(value)
+        );
+
+        mkt.historySeq = seq;
+        mkt.historyHash = chain;
+    }
+
+    function placeSell(
+        uint32 marketId,
+        int256 tick,
+        uint256 lots,
+        bytes32 expectedHash
+    )
+        external
+        nonReentrant
+        returns (uint64 id)
+    {
+        Market storage mkt =
+            _activeMarket(marketId);
+
+        require(
+            mkt.historyHash == expectedHash,
+            "stale hash"
+        );
+
+        return _placeSell(
+            marketId,
             tick,
             lots
         );
     }
 
-
-
-    /// @dev Remove an owned order from the book and emit OrderCanceled, but do
-    ///      not update market escrow totals or transfer tokens. Used only by
-    ///      atomic replacement, which settles the aggregate escrow difference.
-    function _removeOwnedOrderNoTransfer(
-        uint64 id,
-        uint32 expectedMarketId,
-        bool expectedIsBuy
-    )
-        internal
-    {
-        Order storage o = orders[id];
-        require(o.owner == msg.sender, "not order owner");
-        require(o.marketId == expectedMarketId, "wrong market");
-        require(o.isBuy == expectedIsBuy, "wrong order side");
-
-        Market storage mkt = _market(expectedMarketId);
-        uint32 lotsRemaining = o.lotsRemaining;
-        int32 tick = o.tick;
-
-        _unlinkOrder(
-            mkt,
-            expectedIsBuy,
-            tick,
-            id
-        );
-
-        emit OrderCanceled(
-            expectedMarketId,
-            id,
-            msg.sender,
-            expectedIsBuy,
-            tick,
-            lotsRemaining
-        );
-
-        delete orders[id];
-    }
-
     function cancel(uint64 id)
         external
         nonReentrant
-    {
-        _cancel(id);
-    }
-
-    /// @notice Atomically cancel several orders owned by the caller.
-    ///         The frontend can implement "Cancel All My Orders" by supplying
-    ///         the caller's currently visible order IDs. No owner index is stored.
-    function cancelMany(uint64[] calldata ids)
-        external
-        nonReentrant
-    {
-        uint256 n = ids.length;
-        require(n != 0 && n <= MAX_CANCEL_BATCH, "invalid batch size");
-
-        for (uint256 i; i < n; ++i) {
-            _cancel(ids[i]);
-        }
-    }
-
-    function _cancel(uint64 id)
-        internal
     {
         Order storage o = orders[id];
 
@@ -959,13 +958,21 @@ contract SaturnLotExchange is ReentrancyGuard {
         );
 
         uint32 marketId = o.marketId;
-        Market storage mkt = _market(marketId);
 
-        uint32 lotsRemaining = o.lotsRemaining;
+        Market storage mkt =
+            _market(marketId);
+
+        uint64 seq = mkt.historySeq;
+        bytes32 chain = mkt.historyHash;
+
+        uint32 lotsRemaining =
+            o.lotsRemaining;
+
+        uint128 valueRemaining =
+            o.valueRemaining;
+
         bool isBuy = o.isBuy;
         int32 tick = o.tick;
-        uint256 valueRemaining =
-            uint256(lotsRemaining) * priceAtTick(tick);
 
         _unlinkOrder(
             mkt,
@@ -974,26 +981,40 @@ contract SaturnLotExchange is ReentrancyGuard {
             id
         );
 
-        emit OrderCanceled(
+        (seq, chain) = _emitCanceled(
             marketId,
+            seq,
+            chain,
             id,
             msg.sender,
             isBuy,
             tick,
-            lotsRemaining
+            lotsRemaining,
+            valueRemaining
         );
+
+        mkt.historySeq = seq;
+        mkt.historyHash = chain;
 
         delete orders[id];
 
         if (isBuy) {
-            mkt.bookEscrowWETC -= valueRemaining;
+            mkt.bookEscrowWETC -=
+                valueRemaining;
+
+            mkt.bookAskLots -=
+                lotsRemaining;
 
             WETC.safeTransfer(
                 msg.sender,
-                valueRemaining
+                uint256(valueRemaining)
             );
         } else {
-            mkt.bookEscrowLots -= lotsRemaining;
+            mkt.bookAskWETC -=
+                valueRemaining;
+
+            mkt.bookEscrowLots -=
+                lotsRemaining;
 
             IERC20(mkt.lotToken).safeTransfer(
                 msg.sender,
@@ -1001,7 +1022,6 @@ contract SaturnLotExchange is ReentrancyGuard {
             );
         }
     }
-
 
     /* -------------------- Taker FOK -------------------- */
 
@@ -1034,7 +1054,12 @@ contract SaturnLotExchange is ReentrancyGuard {
             _activeMarket(marketId);
 
         require(
-            lots > 0 && lots <= type(uint32).max,
+            lots > 0,
+            "You requested zero lots"
+        );
+
+        require(
+            lots <= MAX_LOTS,
             "invalid lots"
         );
 
@@ -1055,9 +1080,19 @@ contract SaturnLotExchange is ReentrancyGuard {
             maxWetcIn
         );
 
+        uint64 seq = mkt.historySeq;
+        bytes32 chain = mkt.historyHash;
+
         uint256 remain = lots;
         uint256 spent = 0; // exact gross maker consideration
-        uint256 bookEscrowLots = mkt.bookEscrowLots;
+        uint96 price;
+
+        uint256 bookEscrowLots =
+            mkt.bookEscrowLots;
+
+        uint256 bookAskWetc =
+            mkt.bookAskWETC;
+
         int256 t = mkt.bestSellTick;
 
         while (remain > 0) {
@@ -1069,7 +1104,8 @@ contract SaturnLotExchange is ReentrancyGuard {
             TickLevel storage lvl =
                 mkt.sellLevels[t];
 
-            uint256 price = priceAtTick(t);
+            price = lvl.price;
+
             uint64 head = lvl.head;
 
             while (remain > 0) {
@@ -1096,9 +1132,12 @@ contract SaturnLotExchange is ReentrancyGuard {
                 makerLots -= fill;
 
                 uint256 pay =
-                    uint256(fill) * price;
+                    uint256(fill)
+                    * uint256(price);
 
                 spent += pay;
+
+                uint128 remainingValue;
 
                 if (makerLots == 0) {
                     head = makerOrder.next;
@@ -1112,30 +1151,49 @@ contract SaturnLotExchange is ReentrancyGuard {
                     if (head == 0) {
                         lvl.tail = 0;
                     }
+
+                    remainingValue = 0;
                 } else {
+                    remainingValue =
+                        makerOrder.valueRemaining
+                        - uint128(pay);
+
                     makerOrder.lotsRemaining =
                         makerLots;
+
+                    makerOrder.valueRemaining =
+                        remainingValue;
                 }
 
                 lvl.totalLots -= fill;
+                lvl.totalValue -= uint128(pay);
+
                 bookEscrowLots -= fill;
+                bookAskWetc -= pay;
+
                 remain -= fill;
 
                 // Maker receives the exact gross book value.
+                // Fees never touch maker/order math.
                 WETC.safeTransfer(
                     maker,
                     pay
                 );
 
-                emit Trade(
+                (seq, chain) = _emitTrade(
                     marketId,
+                    seq,
+                    chain,
                     oid,
                     msg.sender,
                     maker,
                     true,
                     int32(t),
+                    price,
                     fill,
-                    makerLots
+                    uint128(pay),
+                    makerLots,
+                    remainingValue
                 );
             }
 
@@ -1168,29 +1226,53 @@ contract SaturnLotExchange is ReentrancyGuard {
             "FOK--Unfilled"
         );
 
-        uint256 fee = _takerFee(spent);
-        uint256 totalCost = spent + fee;
+        // Fee is calculated exactly once on aggregate gross WETC.
+        uint256 fee =
+            _takerFee(spent);
+
+        uint256 totalCost =
+            spent + fee;
 
         require(
             totalCost <= maxWetcIn,
             "FOK--Slippage exceeded"
         );
 
-        mkt.bookEscrowLots = bookEscrowLots;
-        mkt.lastTradeBlock = block.number;
-        mkt.lastTradeTick = t;
-        mkt.lastTradeTakerIsBuy = true;
+        mkt.bookEscrowLots =
+            bookEscrowLots;
 
-        emit FOKSettled(
+        mkt.bookAskWETC =
+            bookAskWetc;
+
+        mkt.lastTradeBlock =
+            block.number;
+
+        mkt.lastTradeTick =
+            t;
+
+        mkt.lastTradePrice =
+            price;
+
+        mkt.lastTradeTakerIsBuy =
+            true;
+
+        (seq, chain) = _emitSettled(
             marketId,
+            seq,
+            chain,
             msg.sender,
             true,
             uint32(lots),
             uint128(spent),
-            uint128(fee)
+            uint128(fee),
+            uint128(totalCost)
         );
 
+        mkt.historySeq = seq;
+        mkt.historyHash = chain;
+
         // Taker receives exact integer Lots.
+        // DAO treasury receives the WETC fee.
         IERC20(mkt.lotToken).safeTransfer(
             msg.sender,
             lots
@@ -1209,6 +1291,32 @@ contract SaturnLotExchange is ReentrancyGuard {
                 maxWetcIn - totalCost
             );
         }
+    }
+
+    function buyFOK(
+        uint32 marketId,
+        int256 limitTick,
+        uint256 lots,
+        uint256 maxWetcIn,
+        bytes32 expectedHash
+    )
+        external
+        nonReentrant
+    {
+        Market storage mkt =
+            _activeMarket(marketId);
+
+        require(
+            mkt.historyHash == expectedHash,
+            "stale hash"
+        );
+
+        _buyFOK(
+            marketId,
+            limitTick,
+            lots,
+            maxWetcIn
+        );
     }
 
     function sellFOK(
@@ -1240,13 +1348,23 @@ contract SaturnLotExchange is ReentrancyGuard {
             _activeMarket(marketId);
 
         require(
-            lots > 0 && lots <= type(uint32).max,
+            lots > 0,
+            "You requested zero lots"
+        );
+
+        require(
+            lots <= MAX_LOTS,
             "invalid lots"
         );
 
         require(
             mkt.bestBuyTick != NONE256,
             "There are no buy orders on book"
+        );
+
+        require(
+            lots <= mkt.bookAskLots,
+            "FOK--Insufficient asked Lots on book"
         );
 
         require(
@@ -1260,10 +1378,21 @@ contract SaturnLotExchange is ReentrancyGuard {
             lots
         );
 
+        uint64 seq = mkt.historySeq;
+        bytes32 chain = mkt.historyHash;
+
         uint256 remain = lots;
         uint256 got = 0; // exact gross WETC released from maker bids
-        uint256 bookEscrowWetc = mkt.bookEscrowWETC;
-        int256 t = mkt.bestBuyTick;
+        uint96 price;
+
+        uint256 bookAskLots =
+            mkt.bookAskLots;
+
+        uint256 bookEscrowWetc =
+            mkt.bookEscrowWETC;
+
+        int256 t =
+            mkt.bestBuyTick;
 
         while (remain > 0) {
             require(
@@ -1274,11 +1403,14 @@ contract SaturnLotExchange is ReentrancyGuard {
             TickLevel storage lvl =
                 mkt.buyLevels[t];
 
-            uint256 price = priceAtTick(t);
-            uint64 head = lvl.head;
+            price = lvl.price;
+
+            uint64 head =
+                lvl.head;
 
             while (remain > 0) {
-                uint64 oid = head;
+                uint64 oid =
+                    head;
 
                 if (oid == 0) {
                     break;
@@ -1301,12 +1433,16 @@ contract SaturnLotExchange is ReentrancyGuard {
                 makerLots -= fill;
 
                 uint256 receiveAmt =
-                    uint256(fill) * price;
+                    uint256(fill)
+                    * uint256(price);
 
                 got += receiveAmt;
 
+                uint128 remainingValue;
+
                 if (makerLots == 0) {
-                    head = makerOrder.next;
+                    head =
+                        makerOrder.next;
 
                     unchecked {
                         lvl.orderCount--;
@@ -1317,35 +1453,59 @@ contract SaturnLotExchange is ReentrancyGuard {
                     if (head == 0) {
                         lvl.tail = 0;
                     }
+
+                    remainingValue = 0;
                 } else {
+                    remainingValue =
+                        makerOrder.valueRemaining
+                        - uint128(receiveAmt);
+
                     makerOrder.lotsRemaining =
                         makerLots;
+
+                    makerOrder.valueRemaining =
+                        remainingValue;
                 }
 
                 lvl.totalLots -= fill;
-                bookEscrowWetc -= receiveAmt;
+
+                lvl.totalValue -=
+                    uint128(receiveAmt);
+
+                bookAskLots -= fill;
+
+                bookEscrowWetc -=
+                    receiveAmt;
+
                 remain -= fill;
 
                 // Maker receives exact integer Lots.
+                // Fees never touch maker/order math.
                 IERC20(mkt.lotToken).safeTransfer(
                     maker,
                     uint256(fill)
                 );
 
-                emit Trade(
+                (seq, chain) = _emitTrade(
                     marketId,
+                    seq,
+                    chain,
                     oid,
                     msg.sender,
                     maker,
                     false,
                     int32(t),
+                    price,
                     fill,
-                    makerLots
+                    uint128(receiveAmt),
+                    makerLots,
+                    remainingValue
                 );
             }
 
             if (head == 0) {
-                int32 nxt = lvl.next;
+                int32 nxt =
+                    lvl.next;
 
                 _removeTick(
                     mkt,
@@ -1373,27 +1533,53 @@ contract SaturnLotExchange is ReentrancyGuard {
             "FOK--Unfilled"
         );
 
-        uint256 fee = _takerFee(got);
-        uint256 netWetc = got - fee;
+        // minWetcOut is the seller's true net receipt after fee.
+        uint256 fee =
+            _takerFee(got);
+
+        uint256 netWetc =
+            got - fee;
 
         require(
             netWetc >= minWetcOut,
             "FOK--Slippage exceeded"
         );
 
-        mkt.bookEscrowWETC = bookEscrowWetc;
-        mkt.lastTradeTick = t;
-        mkt.lastTradeBlock = block.number;
-        mkt.lastTradeTakerIsBuy = false;
+        mkt.bookAskLots =
+            bookAskLots;
 
-        emit FOKSettled(
+        mkt.bookEscrowWETC =
+            bookEscrowWetc;
+
+        mkt.lastTradeTick =
+            t;
+
+        mkt.lastTradePrice =
+            price;
+
+        mkt.lastTradeBlock =
+            block.number;
+
+        mkt.lastTradeTakerIsBuy =
+            false;
+
+        (seq, chain) = _emitSettled(
             marketId,
+            seq,
+            chain,
             msg.sender,
             false,
             uint32(lots),
             uint128(got),
-            uint128(fee)
+            uint128(fee),
+            uint128(netWetc)
         );
+
+        mkt.historySeq =
+            seq;
+
+        mkt.historyHash =
+            chain;
 
         WETC.safeTransfer(
             msg.sender,
@@ -1408,6 +1594,32 @@ contract SaturnLotExchange is ReentrancyGuard {
         }
     }
 
+    function sellFOK(
+        uint32 marketId,
+        int256 limitTick,
+        uint256 lots,
+        uint256 minWetcOut,
+        bytes32 expectedHash
+    )
+        external
+        nonReentrant
+    {
+        Market storage mkt =
+            _activeMarket(marketId);
+
+        require(
+            mkt.historyHash == expectedHash,
+            "stale hash"
+        );
+
+        _sellFOK(
+            marketId,
+            limitTick,
+            lots,
+            minWetcOut
+        );
+    }
+
     /* -------------------- Internals: Markets / Orders / Levels -------------------- */
 
     function _market(uint32 marketId)
@@ -1418,7 +1630,20 @@ contract SaturnLotExchange is ReentrancyGuard {
         mkt = markets[marketId];
 
         require(
-            mkt.lotToken != address(0),
+            mkt.exists,
+            "invalid market"
+        );
+    }
+
+    function _marketView(uint32 marketId)
+        internal
+        view
+        returns (Market storage mkt)
+    {
+        mkt = markets[marketId];
+
+        require(
+            mkt.exists,
             "invalid market"
         );
     }
@@ -1428,7 +1653,12 @@ contract SaturnLotExchange is ReentrancyGuard {
         view
         returns (Market storage mkt)
     {
-        mkt = _market(marketId);
+        mkt = markets[marketId];
+
+        require(
+            mkt.exists,
+            "invalid market"
+        );
 
         require(
             mkt.active,
@@ -1440,7 +1670,8 @@ contract SaturnLotExchange is ReentrancyGuard {
         uint32 marketId,
         bool isBuy,
         int32 tick,
-        uint32 lots
+        uint32 lots,
+        uint128 value
     )
         internal
         returns (uint64 id)
@@ -1453,6 +1684,7 @@ contract SaturnLotExchange is ReentrancyGuard {
             tick,
             lots,
             isBuy,
+            value,
             0,
             0
         );
@@ -1462,7 +1694,9 @@ contract SaturnLotExchange is ReentrancyGuard {
         Market storage mkt,
         bool isBuy,
         int32 tick,
+        uint96 price,
         uint32 lots,
+        uint128 value,
         uint64 id
     )
         internal
@@ -1472,11 +1706,12 @@ contract SaturnLotExchange is ReentrancyGuard {
                 ? mkt.buyLevels[tick]
                 : mkt.sellLevels[tick];
 
-        if (lvl.orderCount == 0) {
+        if (lvl.price == 0) {
             _insertTick(
                 mkt,
                 isBuy,
-                tick
+                tick,
+                price
             );
         }
 
@@ -1484,8 +1719,12 @@ contract SaturnLotExchange is ReentrancyGuard {
             lvl.head = id;
             lvl.tail = id;
         } else {
-            orders[lvl.tail].next = id;
-            orders[id].prev = lvl.tail;
+            orders[lvl.tail].next =
+                id;
+
+            orders[id].prev =
+                lvl.tail;
+
             lvl.tail = id;
         }
 
@@ -1493,13 +1732,15 @@ contract SaturnLotExchange is ReentrancyGuard {
             lvl.orderCount++;
         }
 
+        lvl.totalValue += value;
         lvl.totalLots += lots;
     }
 
     function _insertTick(
         Market storage mkt,
         bool isBuy,
-        int32 tick
+        int32 tick,
+        uint96 price
     )
         internal
     {
@@ -1508,37 +1749,54 @@ contract SaturnLotExchange is ReentrancyGuard {
                 ? mkt.buyLevels[tick]
                 : mkt.sellLevels[tick];
 
+        lvl.price = price;
         lvl.prev = NONE32;
         lvl.next = NONE32;
 
         if (isBuy) {
             if (mkt.bestBuyTick == NONE256) {
-                mkt.bestBuyTick = int256(tick);
+                mkt.bestBuyTick =
+                    int256(tick);
+
                 return;
             }
 
-            int256 cur = mkt.bestBuyTick;
+            int256 cur =
+                mkt.bestBuyTick;
 
             if (tick > cur) {
-                lvl.next = int32(cur);
-                mkt.buyLevels[cur].prev = tick;
-                mkt.bestBuyTick = int256(tick);
+                lvl.next =
+                    int32(cur);
+
+                mkt.buyLevels[cur].prev =
+                    tick;
+
+                mkt.bestBuyTick =
+                    int256(tick);
+
                 return;
             }
 
             while (true) {
-                int32 nxt = mkt.buyLevels[cur].next;
+                int32 nxt =
+                    mkt.buyLevels[cur].next;
 
                 if (
                     nxt == NONE32
                     || tick > nxt
                 ) {
-                    lvl.prev = int32(cur);
-                    lvl.next = nxt;
-                    mkt.buyLevels[cur].next = tick;
+                    lvl.prev =
+                        int32(cur);
+
+                    lvl.next =
+                        nxt;
+
+                    mkt.buyLevels[cur].next =
+                        tick;
 
                     if (nxt != NONE32) {
-                        mkt.buyLevels[nxt].prev = tick;
+                        mkt.buyLevels[nxt].prev =
+                            tick;
                     }
 
                     return;
@@ -1548,32 +1806,48 @@ contract SaturnLotExchange is ReentrancyGuard {
             }
         } else {
             if (mkt.bestSellTick == NONE256) {
-                mkt.bestSellTick = int256(tick);
+                mkt.bestSellTick =
+                    int256(tick);
+
                 return;
             }
 
-            int256 cur = mkt.bestSellTick;
+            int256 cur =
+                mkt.bestSellTick;
 
             if (tick < cur) {
-                lvl.next = int32(cur);
-                mkt.sellLevels[cur].prev = tick;
-                mkt.bestSellTick = int256(tick);
+                lvl.next =
+                    int32(cur);
+
+                mkt.sellLevels[cur].prev =
+                    tick;
+
+                mkt.bestSellTick =
+                    int256(tick);
+
                 return;
             }
 
             while (true) {
-                int32 nxt = mkt.sellLevels[cur].next;
+                int32 nxt =
+                    mkt.sellLevels[cur].next;
 
                 if (
                     nxt == NONE32
                     || tick < nxt
                 ) {
-                    lvl.prev = int32(cur);
-                    lvl.next = nxt;
-                    mkt.sellLevels[cur].next = tick;
+                    lvl.prev =
+                        int32(cur);
+
+                    lvl.next =
+                        nxt;
+
+                    mkt.sellLevels[cur].next =
+                        tick;
 
                     if (nxt != NONE32) {
-                        mkt.sellLevels[nxt].prev = tick;
+                        mkt.sellLevels[nxt].prev =
+                            tick;
                     }
 
                     return;
@@ -1620,6 +1894,9 @@ contract SaturnLotExchange is ReentrancyGuard {
 
         lvl.totalLots -=
             o.lotsRemaining;
+
+        lvl.totalValue -=
+            o.valueRemaining;
 
         if (lvl.head == 0) {
             _removeTick(
@@ -1765,7 +2042,7 @@ contract SaturnLotExchange is ReentrancyGuard {
         )
     {
         Market storage mkt =
-            _market(marketId);
+            _marketView(marketId);
 
         if (maxLevels == 0) {
             return (
@@ -1813,13 +2090,11 @@ contract SaturnLotExchange is ReentrancyGuard {
                     mkt.buyLevels[t];
 
                 if (lvl.totalLots > 0) {
-                    uint256 price = priceAtTick(t);
-
                     out[n++] = BookLevel(
                         t,
-                        price,
+                        lvl.price,
                         lvl.totalLots,
-                        uint256(lvl.totalLots) * price,
+                        lvl.totalValue,
                         lvl.orderCount
                     );
                 }
@@ -1838,13 +2113,11 @@ contract SaturnLotExchange is ReentrancyGuard {
                     mkt.sellLevels[t];
 
                 if (lvl.totalLots > 0) {
-                    uint256 price = priceAtTick(t);
-
                     out[n++] = BookLevel(
                         t,
-                        price,
+                        lvl.price,
                         lvl.totalLots,
-                        uint256(lvl.totalLots) * price,
+                        lvl.totalValue,
                         lvl.orderCount
                     );
                 }
@@ -1867,7 +2140,7 @@ contract SaturnLotExchange is ReentrancyGuard {
         )
     {
         Market storage mkt =
-            _market(marketId);
+            _marketView(marketId);
 
         if (maxOrders == 0) {
             return (
@@ -1906,7 +2179,7 @@ contract SaturnLotExchange is ReentrancyGuard {
                 lvl.head;
 
             uint256 price =
-                priceAtTick(t);
+                lvl.price;
 
             while (
                 id != 0
@@ -1925,7 +2198,7 @@ contract SaturnLotExchange is ReentrancyGuard {
                             t,
                             price,
                             o.lotsRemaining,
-                            uint256(o.lotsRemaining) * price
+                            o.valueRemaining
                         );
                 }
 
@@ -1951,7 +2224,7 @@ contract SaturnLotExchange is ReentrancyGuard {
         )
     {
         Market storage mkt =
-            _market(marketId);
+            _marketView(marketId);
 
         uint256 buyLots;
         uint256 buyOrders;
@@ -2000,7 +2273,6 @@ contract SaturnLotExchange is ReentrancyGuard {
         );
     }
 
-    // Exchange state helper; not intended as a manipulation-resistant price oracle.
     function getOracle(
         uint32 marketId
     )
@@ -2015,19 +2287,14 @@ contract SaturnLotExchange is ReentrancyGuard {
         )
     {
         Market storage mkt =
-            _market(marketId);
-
-        uint256 lastPrice =
-            mkt.lastTradeBlock == 0
-                ? 0
-                : priceAtTick(mkt.lastTradeTick);
+            _marketView(marketId);
 
         return (
             mkt.bestBuyTick,
             mkt.bestSellTick,
             mkt.lastTradeTick,
             mkt.lastTradeBlock,
-            lastPrice
+            mkt.lastTradePrice
         );
     }
 
@@ -2042,7 +2309,7 @@ contract SaturnLotExchange is ReentrancyGuard {
         )
     {
         Market storage mkt =
-            _market(marketId);
+            _marketView(marketId);
 
         return (
             mkt.bookEscrowWETC,

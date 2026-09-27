@@ -19,7 +19,7 @@ const ABI = [
   "function marketCount() view returns (uint32)",
   "function marketIdOf(address lotToken) view returns (uint32)",
 
-  "function getMarket(uint32 marketId) view returns (address lotToken,bool active,uint64 historySeq,bytes32 historyHash,int256 bestBuyTick,int256 bestSellTick,int256 lastTradeTick,uint256 lastTradeBlock,uint256 lastTradePrice,bool lastTradeTakerIsBuy,uint256 bookEscrowWETC,uint256 bookEscrowLots,uint256 bookAskLots,uint256 bookAskWETC)",
+  "function getMarket(uint32 marketId) view returns (address lotToken,bool active,int256 bestBuyTick,int256 bestSellTick,int256 lastTradeTick,uint256 lastTradeBlock,uint256 lastTradePrice,bool lastTradeTakerIsBuy,uint256 bookEscrowWETC,uint256 bookEscrowLots)",
 
   "function getBuyBook(uint32 marketId,uint256 depth) view returns (tuple(int256 tick,uint256 price,uint256 totalLots,uint256 totalValue,uint256 orderCount)[] out,uint256 n)",
   "function getSellBook(uint32 marketId,uint256 depth) view returns (tuple(int256 tick,uint256 price,uint256 totalLots,uint256 totalValue,uint256 orderCount)[] out,uint256 n)",

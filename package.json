@@ -22,5 +22,15 @@
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0"
+  },
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "test:exchange": "hardhat test test/exchangeMatching.test.js test/saturnLotExchange.test.js test/exchangePolicy.test.js test/exchangeGuard.test.js test/exchangeCallbacks.test.js",
+    "test:history": "hardhat test test/tradeHistory.test.js test/chartHistory.test.js",
+    "test:tokens": "hardhat test test/tokens.test.js",
+    "test:load": "hardhat test test/exchangeMatching.test.js --network hardhat --grep 'Gas metrics'",
+    "test:smoke": "hardhat test test/fokSmoke.test.js",
+    "test:clean": "hardhat clean && hardhat test"
   }
 }

@@ -34,6 +34,7 @@ function writeAddresses(entries) {
 }
 
 async function seedOrders(clob, wetc, strn10k, waitForReceipt) {
+  const marketId = await clob.marketIdOf(strn10k.target);
   const maxApprove = ethers.MaxUint256;
 
   await waitForReceipt(await wetc.approve(clob.target, maxApprove), "WETC approve");
@@ -57,14 +58,14 @@ async function seedOrders(clob, wetc, strn10k, waitForReceipt) {
 
   for (const order of sellSeeds) {
     await waitForReceipt(
-      await clob.placeSell(order.tick, order.lots),
+      await clob.placeSell(marketId, order.tick, order.lots),
       `seed sell ${order.tick}`
     );
   }
 
   for (const order of buySeeds) {
     await waitForReceipt(
-      await clob.placeBuy(order.tick, order.lots),
+      await clob.placeBuy(marketId, order.tick, order.lots),
       `seed buy ${order.tick}`
     );
   }
@@ -129,18 +130,22 @@ async function main() {
     console.log("STRN10K:", strn10k.target);
   }
 
-  const SaturnLotTrade = await ethers.getContractFactory("SaturnLotTrade");
-  const clob = await SaturnLotTrade.deploy(wetc.target, strn10k.target);
-  await waitForReceipt(clob.deploymentTransaction(), "SaturnLotTrade deploy");
-  console.log("SaturnLotTrade:", clob.target);
+  const SaturnLotExchange = await ethers.getContractFactory("SaturnLotExchange");
+  const clob = await SaturnLotExchange.deploy(wetc.target);
+  const deploymentReceipt = await waitForReceipt(clob.deploymentTransaction(), "SaturnLotExchange deploy");
+  console.log("SaturnLotExchange:", clob.target);
 
+  await waitForReceipt(await clob.approveMarket(strn10k.target), "approve market");
+  const marketId = await clob.marketIdOf(strn10k.target);
   await seedOrders(clob, wetc, strn10k, waitForReceipt);
   console.log("Seeded initial book orders.");
 
   const addresses = {
+    MORDOR_EXCHANGE_DEPLOYMENT_BLOCK: deploymentReceipt.blockNumber,
+    MORDOR_STRN10K_MARKET_ID: marketId.toString(),
     MORDOR_WETC_ADDRESS: wetc.target,
     MORDOR_STRN10K_ADDRESS: strn10k.target,
-    MORDOR_SATURN_LOT_TRADE_ADDRESS: clob.target
+    MORDOR_SATURN_LOT_EXCHANGE_ADDRESS: clob.target
   };
   writeAddresses(addresses);
   console.log("Saved addresses to .env");

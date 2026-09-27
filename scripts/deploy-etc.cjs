@@ -48,6 +48,10 @@ async function main() {
     throw new Error("Set MAINNET_WETC_ADDRESS and MAINNET_STRN10K_ADDRESS in .env");
   }
 
+  if (wetcAddress.toLowerCase() !== "0x82a618305706b14e7bcf2592d4b9324a366b6dad") {
+    throw new Error("ETC exchange uses its fixed mainnet WETC address");
+  }
+
   const wetcCode = await ethers.provider.getCode(wetcAddress);
   if (!wetcCode || wetcCode === "0x") {
     throw new Error(`No code at MAINNET_WETC_ADDRESS: ${wetcAddress}`);
@@ -57,16 +61,19 @@ async function main() {
     throw new Error(`No code at MAINNET_STRN10K_ADDRESS: ${strn10kAddress}`);
   }
 
-  const SaturnLotTrade = await ethers.getContractFactory("SaturnLotTrade");
-  const clob = await SaturnLotTrade.deploy(wetcAddress, strn10kAddress);
+  const SaturnLotExchange = await ethers.getContractFactory("SaturnLotExchange");
+  const clob = await SaturnLotExchange.deploy(wetcAddress);
   const receipt = await clob.deploymentTransaction().wait();
-  console.log("SaturnLotTrade:", clob.target, "tx:", receipt.hash);
+  console.log("SaturnLotExchange:", clob.target, "tx:", receipt.hash);
+
+  await (await clob.approveMarket(strn10kAddress)).wait();
 
   const addresses = {
-    MAINNET_SATURN_LOT_TRADE_ADDRESS: clob.target,
+    MAINNET_EXCHANGE_DEPLOYMENT_BLOCK: receipt.blockNumber,
+    MAINNET_SATURN_LOT_EXCHANGE_ADDRESS: clob.target,
   };
   writeAddresses(addresses);
-  console.log("Saved MAINNET_SATURN_LOT_TRADE_ADDRESS to .env");
+  console.log("Saved MAINNET_SATURN_LOT_EXCHANGE_ADDRESS to .env");
 }
 
 main().catch((err) => {

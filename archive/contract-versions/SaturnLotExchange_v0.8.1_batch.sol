@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 /*
-  Saturn Lot Exchange v0.8.2 (Atomic Quote Replacement)
+  Saturn Lot Exchange v0.8.1 (Batch Maker Operations)
   By PseudoDeterminist
 
   One WETC quote token, many DAO/owner-approved Lot Token markets.
@@ -518,89 +518,6 @@ contract SaturnLotExchange is ReentrancyGuard {
         mkt.bookEscrowWETC += totalCost;
     }
 
-
-
-    /// @notice Atomically replace caller-owned buy orders in one market with a
-    ///         new buy ladder. Old escrow is reused and only the net WETC
-    ///         difference is transferred. Replacement orders receive new IDs
-    ///         and normal tail-of-tick FIFO priority.
-    function replaceBuyBatch(
-        uint32 marketId,
-        uint64[] calldata cancelIds,
-        int256[] calldata ticks,
-        uint256[] calldata lots
-    )
-        external
-        nonReentrant
-        returns (uint64[] memory ids)
-    {
-        uint256 cancelN = cancelIds.length;
-        uint256 placeN = ticks.length;
-        require(cancelN != 0 && cancelN <= MAX_CANCEL_BATCH, "invalid cancel batch size");
-        require(placeN != 0 && placeN <= MAX_PLACE_BATCH, "invalid place batch size");
-        require(lots.length == placeN, "batch length mismatch");
-
-        Market storage mkt = _activeMarket(marketId);
-        uint256 releasedWETC;
-
-        // Validate the complete cancel set and calculate reusable escrow before
-        // mutating state. The actual removal loop rechecks ownership/market/side,
-        // so duplicate IDs also revert atomically.
-        for (uint256 i; i < cancelN; ++i) {
-            Order storage o = orders[cancelIds[i]];
-            require(o.owner == msg.sender, "not order owner");
-            require(o.marketId == marketId, "wrong market");
-            require(o.isBuy, "wrong order side");
-            releasedWETC += uint256(o.lotsRemaining) * priceAtTick(o.tick);
-        }
-
-        int32[] memory validatedTicks = new int32[](placeN);
-        uint32[] memory validatedLots = new uint32[](placeN);
-        uint256 newWETC;
-
-        for (uint256 i; i < placeN; ++i) {
-            (int32 t, uint32 lots32, uint256 cost) =
-                _validateBuyOrder(mkt, ticks[i], lots[i]);
-            validatedTicks[i] = t;
-            validatedLots[i] = lots32;
-            newWETC += cost;
-        }
-
-        // If the new ladder needs more quote escrow, pull only the difference.
-        if (newWETC > releasedWETC) {
-            WETC.safeTransferFrom(
-                msg.sender,
-                address(this),
-                newWETC - releasedWETC
-            );
-        }
-
-        for (uint256 i; i < cancelN; ++i) {
-            _removeOwnedOrderNoTransfer(cancelIds[i], marketId, true);
-        }
-
-        ids = new uint64[](placeN);
-        for (uint256 i; i < placeN; ++i) {
-            ids[i] = _placeBuyEscrowed(
-                mkt,
-                marketId,
-                validatedTicks[i],
-                validatedLots[i]
-            );
-        }
-
-        mkt.bookEscrowWETC =
-            mkt.bookEscrowWETC - releasedWETC + newWETC;
-
-        // If the new ladder needs less quote escrow, refund only the difference.
-        if (releasedWETC > newWETC) {
-            WETC.safeTransfer(
-                msg.sender,
-                releasedWETC - newWETC
-            );
-        }
-    }
-
     function _validateBuyOrder(
         Market storage mkt,
         int256 tick,
@@ -742,88 +659,6 @@ contract SaturnLotExchange is ReentrancyGuard {
         mkt.bookEscrowLots += totalLots;
     }
 
-
-
-    /// @notice Atomically replace caller-owned sell orders in one market with a
-    ///         new sell ladder. Old Lot Token escrow is reused and only the net
-    ///         token difference is transferred. Replacement orders receive new
-    ///         IDs and normal tail-of-tick FIFO priority.
-    function replaceSellBatch(
-        uint32 marketId,
-        uint64[] calldata cancelIds,
-        int256[] calldata ticks,
-        uint256[] calldata lots
-    )
-        external
-        nonReentrant
-        returns (uint64[] memory ids)
-    {
-        uint256 cancelN = cancelIds.length;
-        uint256 placeN = ticks.length;
-        require(cancelN != 0 && cancelN <= MAX_CANCEL_BATCH, "invalid cancel batch size");
-        require(placeN != 0 && placeN <= MAX_PLACE_BATCH, "invalid place batch size");
-        require(lots.length == placeN, "batch length mismatch");
-
-        Market storage mkt = _activeMarket(marketId);
-        uint256 releasedLots;
-
-        for (uint256 i; i < cancelN; ++i) {
-            Order storage o = orders[cancelIds[i]];
-            require(o.owner == msg.sender, "not order owner");
-            require(o.marketId == marketId, "wrong market");
-            require(!o.isBuy, "wrong order side");
-            releasedLots += o.lotsRemaining;
-        }
-
-        int32[] memory validatedTicks = new int32[](placeN);
-        uint32[] memory validatedLots = new uint32[](placeN);
-        uint256 newLots;
-
-        for (uint256 i; i < placeN; ++i) {
-            (int32 t, uint32 lots32) =
-                _validateSellOrder(mkt, ticks[i], lots[i]);
-            validatedTicks[i] = t;
-            validatedLots[i] = lots32;
-            newLots += lots32;
-        }
-
-        IERC20 lotToken = IERC20(mkt.lotToken);
-
-        // If the new ladder is larger, pull only the additional Lot Tokens.
-        if (newLots > releasedLots) {
-            _pullExact(
-                lotToken,
-                msg.sender,
-                newLots - releasedLots
-            );
-        }
-
-        for (uint256 i; i < cancelN; ++i) {
-            _removeOwnedOrderNoTransfer(cancelIds[i], marketId, false);
-        }
-
-        ids = new uint64[](placeN);
-        for (uint256 i; i < placeN; ++i) {
-            ids[i] = _placeSellEscrowed(
-                mkt,
-                marketId,
-                validatedTicks[i],
-                validatedLots[i]
-            );
-        }
-
-        mkt.bookEscrowLots =
-            mkt.bookEscrowLots - releasedLots + newLots;
-
-        // If the new ladder is smaller, refund only the excess Lot Tokens.
-        if (releasedLots > newLots) {
-            lotToken.safeTransfer(
-                msg.sender,
-                releasedLots - newLots
-            );
-        }
-    }
-
     function _validateSellOrder(
         Market storage mkt,
         int256 tick,
@@ -884,46 +719,6 @@ contract SaturnLotExchange is ReentrancyGuard {
             tick,
             lots
         );
-    }
-
-
-
-    /// @dev Remove an owned order from the book and emit OrderCanceled, but do
-    ///      not update market escrow totals or transfer tokens. Used only by
-    ///      atomic replacement, which settles the aggregate escrow difference.
-    function _removeOwnedOrderNoTransfer(
-        uint64 id,
-        uint32 expectedMarketId,
-        bool expectedIsBuy
-    )
-        internal
-    {
-        Order storage o = orders[id];
-        require(o.owner == msg.sender, "not order owner");
-        require(o.marketId == expectedMarketId, "wrong market");
-        require(o.isBuy == expectedIsBuy, "wrong order side");
-
-        Market storage mkt = _market(expectedMarketId);
-        uint32 lotsRemaining = o.lotsRemaining;
-        int32 tick = o.tick;
-
-        _unlinkOrder(
-            mkt,
-            expectedIsBuy,
-            tick,
-            id
-        );
-
-        emit OrderCanceled(
-            expectedMarketId,
-            id,
-            msg.sender,
-            expectedIsBuy,
-            tick,
-            lotsRemaining
-        );
-
-        delete orders[id];
     }
 
     function cancel(uint64 id)
