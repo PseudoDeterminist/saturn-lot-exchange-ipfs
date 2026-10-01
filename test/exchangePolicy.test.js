@@ -45,6 +45,78 @@ describe('Exchange governance, fees and market isolation',function(){
     await ex.transferOwnership(taker.address);await ex.connect(taker).setTakerFeeBps(50);
     expect(await ex.takerFeeBps()).to.equal(50);
   });
+  it('atomically approves and unapproves batches of markets',async()=>{
+    const {quote,lot,other,owner}=await loadFixture(fixture);
+    const Factory=await ethers.getContractFactory('SaturnLotExchange');
+    const ex=await Factory.deploy(quote.target,owner.address);
+
+    await expect(ex.approveMarkets([])).to.be.revertedWith('empty markets');
+    await expect(ex.unapproveMarkets([])).to.be.revertedWith('empty markets');
+
+    await ex.approveMarkets([lot.target,other.target]);
+
+    expect(await ex.marketCount()).to.equal(2);
+    expect(await ex.marketIdOf(lot.target)).to.equal(1);
+    expect(await ex.marketIdOf(other.target)).to.equal(2);
+    expect((await ex.getMarket(1)).active).to.equal(true);
+    expect((await ex.getMarket(2)).active).to.equal(true);
+
+    await ex.unapproveMarkets([1,2]);
+
+    expect((await ex.getMarket(1)).active).to.equal(false);
+    expect((await ex.getMarket(2)).active).to.equal(false);
+  });
+
+  it('rolls back an entire market batch if any member fails',async()=>{
+    const {quote,lot,other,owner}=await loadFixture(fixture);
+    const Factory=await ethers.getContractFactory('SaturnLotExchange');
+    const ex=await Factory.deploy(quote.target,owner.address);
+
+    await ex.approveMarket(lot.target);
+
+    await expect(
+      ex.approveMarkets([other.target,lot.target])
+    ).to.be.revertedWith('market already active');
+
+    expect(await ex.marketCount()).to.equal(1);
+    expect(await ex.marketIdOf(other.target)).to.equal(0);
+
+    await ex.approveMarket(other.target);
+
+    await expect(
+      ex.unapproveMarkets([1,1])
+    ).to.be.revertedWith('market not active');
+
+    expect((await ex.getMarket(1)).active).to.equal(true);
+    expect((await ex.getMarket(2)).active).to.equal(true);
+  });
+
+  it('caps market batches and restricts them to the owner',async()=>{
+    const {ex,lot,taker}=await loadFixture(fixture);
+
+    await expect(
+      ex.connect(taker).approveMarkets([lot.target])
+    ).to.be.revertedWith('not owner');
+
+    await expect(
+      ex.connect(taker).unapproveMarkets([1])
+    ).to.be.revertedWith('not owner');
+
+    const tooManyTokens =
+      Array(Number(await ex.MAX_MARKETS_PER_BATCH()) + 1).fill(lot.target);
+
+    const tooManyIds =
+      Array(Number(await ex.MAX_MARKETS_PER_BATCH()) + 1).fill(1);
+
+    await expect(
+      ex.approveMarkets(tooManyTokens)
+    ).to.be.revertedWith('too many markets');
+
+    await expect(
+      ex.unapproveMarkets(tooManyIds)
+    ).to.be.revertedWith('too many markets');
+  });
+
   it('retirement blocks trading but permits cancellation and reactivation',async()=>{
     const {ex,lot,maker}=await loadFixture(fixture);
 

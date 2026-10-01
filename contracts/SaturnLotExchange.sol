@@ -41,6 +41,8 @@ contract SaturnLotExchange is ReentrancyGuard {
     uint16 public constant MAX_TAKER_FEE_BPS = 50; // governance can never exceed 0.50%
     uint16 public takerFeeBps;                     // 0 at deployment; owner/DAO may set later
 
+    uint256 public constant MAX_MARKETS_PER_BATCH = 32;
+
     /* -------------------- Events -------------------- */
 
     event OwnershipTransferred(
@@ -265,6 +267,51 @@ contract SaturnLotExchange is ReentrancyGuard {
         onlyOwner
         returns (uint32 marketId)
     {
+        return _approveMarket(lotToken);
+    }
+
+    /// @notice Atomically approve up to MAX_MARKETS_PER_BATCH Lot Token markets.
+    function approveMarkets(address[] calldata lotTokens)
+        external
+        onlyOwner
+    {
+        uint256 length = lotTokens.length;
+
+        require(length != 0, "empty markets");
+        require(length <= MAX_MARKETS_PER_BATCH, "too many markets");
+
+        for (uint256 i; i < length; ++i) {
+            _approveMarket(lotTokens[i]);
+        }
+    }
+
+    /// @notice Stop new orders and taker trades. Existing makers can still cancel.
+    function unapproveMarket(uint32 marketId)
+        external
+        onlyOwner
+    {
+        _unapproveMarket(marketId);
+    }
+
+    /// @notice Atomically unapprove up to MAX_MARKETS_PER_BATCH markets.
+    function unapproveMarkets(uint32[] calldata marketIds)
+        external
+        onlyOwner
+    {
+        uint256 length = marketIds.length;
+
+        require(length != 0, "empty markets");
+        require(length <= MAX_MARKETS_PER_BATCH, "too many markets");
+
+        for (uint256 i; i < length; ++i) {
+            _unapproveMarket(marketIds[i]);
+        }
+    }
+
+    function _approveMarket(address lotToken)
+        internal
+        returns (uint32 marketId)
+    {
         require(lotToken != address(0), "zero lot token");
         require(lotToken != address(WETC), "lot token is WETC");
 
@@ -293,10 +340,8 @@ contract SaturnLotExchange is ReentrancyGuard {
         emit MarketApproved(marketId, lotToken);
     }
 
-    /// @notice Stop new orders and taker trades. Existing makers can still cancel.
-    function unapproveMarket(uint32 marketId)
-        external
-        onlyOwner
+    function _unapproveMarket(uint32 marketId)
+        internal
     {
         Market storage mkt = _market(marketId);
 
