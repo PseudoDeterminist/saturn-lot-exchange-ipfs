@@ -7,8 +7,8 @@ async function fixture(){
   const Token=await ethers.getContractFactory('TestERC20');
   const quote=await Token.deploy('Quote','Q',18,ethers.parseEther('100000'));
   const lot=await Token.deploy('Lot','L',0,100000), other=await Token.deploy('Other','O',0,100000);
-  const Factory=await ethers.getContractFactory('SaturnLotExchange');const ex=await Factory.deploy(quote.target);
-  await ex.approveMarket(lot.target);await ex.approveMarket(other.target);await ex.setFeeTreasury(treasury.address);
+  const Factory=await ethers.getContractFactory('SaturnLotExchange');const ex=await Factory.deploy(quote.target,owner.address);
+  await ex.approveMarket(lot.target);await ex.approveMarket(other.target);await ex.activate();
   for(const token of [quote,lot,other])for(const user of [maker,taker]){
     await token.transfer(user.address,token===quote?ethers.parseEther('1000'):1000n);
     await token.connect(user).approve(ex.target,ethers.MaxUint256);
@@ -16,12 +16,31 @@ async function fixture(){
   return {ex,quote,lot,other,owner,maker,taker,treasury};
 }
 describe('Exchange governance, fees and market isolation',function(){
+  it('deploys inactive and only the designated owner can activate once',async()=>{
+    const {quote,lot,owner,maker}=await loadFixture(fixture);
+    const Factory=await ethers.getContractFactory('SaturnLotExchange');
+    const ex=await Factory.deploy(quote.target,owner.address);
+
+    expect(await ex.owner()).to.equal(owner.address);
+    expect(await ex.exchangeActive()).to.equal(false);
+
+    await ex.approveMarket(lot.target);
+
+    await expect(ex.connect(maker).activate()).to.be.revertedWith('not owner');
+    await expect(ex.connect(maker).placeBuy(1,120,1)).to.be.revertedWith('exchange inactive');
+
+    await expect(ex.activate()).to.emit(ex,'ExchangeActivated');
+    expect(await ex.exchangeActive()).to.equal(true);
+
+    await expect(ex.activate()).to.be.revertedWith('already active');
+  });
+
   it('enforces ownership, fee cap and nonzero governance addresses',async()=>{
     const {ex,lot,taker}=await loadFixture(fixture);
-    for(const [method,args] of [['transferOwnership',[taker.address]],['setTakerFeeBps',[1]],['setFeeTreasury',[taker.address]],['approveMarket',[lot.target]],['unapproveMarket',[1]]])
+    for(const [method,args] of [['transferOwnership',[taker.address]],['setTakerFeeBps',[1]],['activate',[]],['approveMarket',[lot.target]],['unapproveMarket',[1]]])
       await expect(ex.connect(taker)[method](...args)).to.be.revertedWith('not owner');
     await expect(ex.setTakerFeeBps(51)).to.be.revertedWith('fee too high');
-    await expect(ex.setFeeTreasury(ethers.ZeroAddress)).to.be.revertedWith('zero treasury');
+    await expect(ex.activate()).to.be.revertedWith('already active');
     await expect(ex.transferOwnership(ethers.ZeroAddress)).to.be.revertedWith('zero owner');
     await ex.transferOwnership(taker.address);await ex.connect(taker).setTakerFeeBps(50);
     expect(await ex.takerFeeBps()).to.equal(50);
@@ -58,20 +77,20 @@ describe('Exchange governance, fees and market isolation',function(){
     await expect(ex.getMarket(99)).to.be.revertedWith('invalid market');
   });
   for(const buy of [true,false])for(const bps of [0n,1n,37n,50n])it(`${buy?'buy':'sell'} FOK settles gross makers and exact aggregate fee at ${bps} bps`,async()=>{
-    const {ex,quote,lot,maker,taker,treasury}=await loadFixture(fixture);await ex.setTakerFeeBps(bps);
+    const {ex,quote,lot,owner,maker,taker}=await loadFixture(fixture);await ex.setTakerFeeBps(bps);
     const ticks=buy?[121,122]:[120,119];
     for(const tick of ticks)await ex.connect(maker)[buy?'placeSell':'placeBuy'](1,tick,1);
     // Keep unrelated quote escrow present to ensure rollback preserves other markets.
     await ex.connect(maker).placeBuy(2,110,3);const otherBefore=await ex.getMarket(2);
     const gross=(await ex.priceAtTick(ticks[0]))+(await ex.priceAtTick(ticks[1]));const fee=gross*bps/10000n;
-    const before={t:await quote.balanceOf(taker.address),m:await quote.balanceOf(maker.address),f:await quote.balanceOf(treasury.address),l:await lot.balanceOf(taker.address),market:await ex.getMarket(1)};
+    const before={t:await quote.balanceOf(taker.address),m:await quote.balanceOf(maker.address),f:await quote.balanceOf(owner.address),l:await lot.balanceOf(taker.address),market:await ex.getMarket(1)};
     const method=buy?'buyFOK(uint32,int256,uint256,uint256)':'sellFOK(uint32,int256,uint256,uint256)';
     await expect(ex.connect(taker)[method](1,ticks[1],2,buy?gross+fee-1n:gross-fee+1n)).to.be.revertedWith(!buy && bps === 0n ? 'FOK--Insufficient escrowed WETC on book' : 'FOK--Slippage exceeded');
     expect(await ex.getMarket(1)).to.deep.equal(before.market);expect(await ex.getMarket(2)).to.deep.equal(otherBefore);
     expect(await quote.balanceOf(taker.address)).to.equal(before.t);
     const receipt=await (await ex.connect(taker)[method](1,ticks[1],2,buy?gross+fee+123n:gross-fee)).wait();
     expect(await quote.balanceOf(taker.address)).to.equal(before.t+(buy?-gross-fee:gross-fee));
-    expect(await quote.balanceOf(treasury.address)).to.equal(before.f+fee);
+    expect(await quote.balanceOf(owner.address)).to.equal(before.f+fee);
     expect(await quote.balanceOf(maker.address)).to.equal(before.m+(buy?gross:0n));
     expect(await lot.balanceOf(taker.address)).to.equal(before.l+(buy?2n:-2n));
     expect(await ex.getMarket(2)).to.deep.equal(otherBefore);

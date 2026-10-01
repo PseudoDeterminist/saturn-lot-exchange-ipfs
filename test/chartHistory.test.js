@@ -114,9 +114,11 @@ describe("Execution chart rendering", function () {
     const wetc=await Token.deploy("WETC","WETC",18,ethers.parseEther("1000"));
     const lot=await Token.deploy("LOT","LOT",0,1000);
     const Exchange=await ethers.getContractFactory("SaturnLotExchange");
-    const exchange=await Exchange.deploy(wetc.target);
+    const [owner]=await ethers.getSigners();
+    const exchange=await Exchange.deploy(wetc.target,owner.address);
     const receipt=await exchange.deploymentTransaction().wait();
     await exchange.approveMarket(lot.target);
+    await exchange.activate();
     await wetc.approve(exchange.target,ethers.MaxUint256);await lot.approve(exchange.target,ethers.MaxUint256);
     await exchange.placeSell(1,121,1);await exchange.placeSell(1,122,2);
     const provider=new ethers.BrowserProvider({request:({method,params})=>hardhat.network.provider.send(method,params||[])},undefined,{cacheTimeout:-1});

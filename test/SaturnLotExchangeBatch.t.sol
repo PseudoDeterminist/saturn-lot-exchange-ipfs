@@ -35,13 +35,16 @@ contract SaturnLotExchangeBatchTest is Test {
         batchLot2 = new BatchMockToken("Batch LOT2", "bLOT2");
         singleLot2 = new BatchMockToken("Single LOT2", "sLOT2");
 
-        batchEx = new SaturnLotExchange(address(batchWetc));
-        singleEx = new SaturnLotExchange(address(singleWetc));
+        batchEx = new SaturnLotExchange(address(batchWetc), address(this));
+        singleEx = new SaturnLotExchange(address(singleWetc), address(this));
 
         assertEq(batchEx.approveMarket(address(batchLot1)), MARKET1);
         assertEq(singleEx.approveMarket(address(singleLot1)), MARKET1);
         assertEq(batchEx.approveMarket(address(batchLot2)), MARKET2);
         assertEq(singleEx.approveMarket(address(singleLot2)), MARKET2);
+
+        batchEx.activate();
+        singleEx.activate();
 
         address[2] memory users = [alice, bob];
         for (uint256 i; i < users.length; ++i) {

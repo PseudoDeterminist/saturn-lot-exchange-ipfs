@@ -8,15 +8,16 @@ import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
 const { ethers } = hardhat;
 
 async function deployFixture() {
-  const [, taker] = await ethers.getSigners();
+  const [owner, taker] = await ethers.getSigners();
   const Token = await ethers.getContractFactory("TestERC20");
   const wetc = await Token.deploy("WETC", "WETC", 18, ethers.parseEther("1000000"));
   const lot = await Token.deploy("LOT", "LOT", 0, 1000000n);
   const otherLot = await Token.deploy("OTHER", "OTHER", 0, 1000000n);
   const Exchange = await ethers.getContractFactory("SaturnLotExchange");
-  const exchange = await Exchange.deploy(await wetc.getAddress());
+  const exchange = await Exchange.deploy(await wetc.getAddress(), owner.address);
   await exchange.approveMarket(await lot.getAddress());
   await exchange.approveMarket(await otherLot.getAddress());
+  await exchange.activate();
   await wetc.transfer(taker.address, ethers.parseEther("1000"));
   await lot.transfer(taker.address, 100n);
   for (const token of [wetc, lot]) {

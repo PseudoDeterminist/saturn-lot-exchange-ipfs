@@ -147,10 +147,12 @@ async function deployFixture() {
   const strn10k = await TestERC20.deploy("STRN10K", "STRN10K", 0, 1000000n);
   const SaturnLotExchange = await ethers.getContractFactory("SaturnLotExchange");
   const exchange = await SaturnLotExchange.deploy(
-    await wetc.getAddress()
+    await wetc.getAddress(),
+    deployer.address
   );
 
   await exchange.approveMarket(await strn10k.getAddress());
+  await exchange.activate();
 
   const wetcAmount = ethers.parseUnits("100000", 18);
   const strn10kAmount = 100000n;
@@ -183,7 +185,7 @@ describe("SaturnLotExchange", function () {
 
   it("rejects zero quote token on deploy and invalid lot tokens on approval", async () => {
     const Factory = await ethers.getContractFactory("SaturnLotExchange");
-    await expect(Factory.deploy(ethers.ZeroAddress)).to.be.revertedWith("zero WETC");
+    await expect(Factory.deploy(ethers.ZeroAddress, ethers.ZeroAddress)).to.be.revertedWith("zero WETC");
     const { exchange, wetc } = await loadFixture(deployFixture);
     await expect(exchange.approveMarket(ethers.ZeroAddress)).to.be.revertedWith("zero lot token");
     await expect(exchange.approveMarket(wetc.target)).to.be.revertedWith("lot token is WETC");

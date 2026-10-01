@@ -7,9 +7,9 @@ async function fixture() {
   const [owner,maker,taker,treasury]=await ethers.getSigners();
   const Token=await ethers.getContractFactory('CallbackERC20');
   const quote=await Token.deploy(), lot=await Token.deploy(), other=await Token.deploy();
-  const F=await ethers.getContractFactory('SaturnLotExchange');const ex=await F.deploy(quote.target);
+  const F=await ethers.getContractFactory('SaturnLotExchange');const ex=await F.deploy(quote.target,owner.address);
   await ex.approveMarket(lot.target);await ex.approveMarket(other.target);
-  await ex.setTakerFeeBps(37);await ex.setFeeTreasury(treasury.address);
+  await ex.setTakerFeeBps(37);await ex.activate();
   for(const t of [quote,lot,other]) for(const a of [owner,maker,taker]) {
     if(a!==owner) await t.transfer(a.address,ethers.parseEther('1000'));
     await t.connect(a).approve(ex.target,ethers.MaxUint256);
@@ -25,7 +25,7 @@ async function state(f) {
   for(let i=1n;i<=next;i++) orders.push(await ex.orders(i));
   const tokens=[];
   for(const t of [quote,lot,other]) tokens.push(await Promise.all(accounts.flatMap(a=>[t.balanceOf(a),t.allowance(a,ex.target)])));
-  return {markets:await Promise.all([ex.getMarket(1),ex.getMarket(2)]),books:await Promise.all([ex.getBuyBook(1,20),ex.getSellBook(1,20),ex.getBuyBook(2,20),ex.getSellBook(2,20)]),orders,next,tokens,owner:await ex.owner(),fee:await ex.takerFeeBps(),treasury:await ex.feeTreasury()};
+  return {markets:await Promise.all([ex.getMarket(1),ex.getMarket(2)]),books:await Promise.all([ex.getBuyBook(1,20),ex.getSellBook(1,20),ex.getBuyBook(2,20),ex.getSellBook(2,20)]),orders,next,tokens,owner:await ex.owner(),fee:await ex.takerFeeBps(),active:await ex.exchangeActive()};
 }
 async function reconcile(f) {
   const {ex,quote,lot,other}=f;let escrow=0n;
@@ -45,7 +45,7 @@ async function reconcile(f) {
   expect(await quote.balanceOf(ex.target)).to.equal(escrow);
 }
 async function boundary(f,name) {
-  const {ex,quote,lot,maker,taker,treasury}=f;
+  const {ex,quote,lot,owner,maker,taker}=f;
   const price=await ex.priceAtTick(121),gross=price*2n,fee=gross*37n/10000n;
   const buy=()=>ex.connect(taker)['buyFOK(uint32,int256,uint256,uint256)'](1,121,2,gross+fee+100n);
   const sell=()=>ex.connect(taker)['sellFOK(uint32,int256,uint256,uint256)'](1,120,2,0);
@@ -55,7 +55,7 @@ async function boundary(f,name) {
     buyInput:[quote,taker.address,ex.target,true,buy],sellInput:[lot,taker.address,ex.target,true,sell],
     buyMaker:[quote,ex.target,maker.address,false,buy],sellMaker:[lot,ex.target,maker.address,false,sell],
     buyOutput:[lot,ex.target,taker.address,false,buy],sellOutput:[quote,ex.target,taker.address,false,sell],
-    buyRefund:[quote,ex.target,taker.address,false,buy],buyFee:[quote,ex.target,treasury.address,false,buy],sellFee:[quote,ex.target,treasury.address,false,sell],
+    buyRefund:[quote,ex.target,taker.address,false,buy],buyFee:[quote,ex.target,owner.address,false,buy],sellFee:[quote,ex.target,owner.address,false,sell],
     cancelBuy:[quote,ex.target,maker.address,false,()=>ex.connect(maker).cancel(1)],cancelSell:[lot,ex.target,maker.address,false,()=>ex.connect(maker).cancel(2)],
   };
   return table[name];
@@ -157,14 +157,14 @@ describe('Exchange-wide reentrancy guard',function(){
     await f.quote.transfer(lot.target,ethers.parseEther('10'));
     await lot.execute(f.quote.target,f.quote.interface.encodeFunctionData('approve',[ex.target,ethers.MaxUint256]));
     const id=await ex.nextOrderId();await lot.execute(ex.target,ex.interface.encodeFunctionData('placeBuy(uint32,int256,uint256)',[1,118,1]));
-    const args={cancel:[id],transferOwnership:[taker.address],approveMarket:[f.quote.target],unapproveMarket:[1],setTakerFeeBps:[1],setFeeTreasury:[taker.address]};
+    const args={cancel:[id],transferOwnership:[taker.address],approveMarket:[f.quote.target],unapproveMarket:[1],setTakerFeeBps:[1]};
     // A valid new lot-token address ensures approval would otherwise succeed.
     if(name==='approveMarket')args[name]=[(await (await ethers.getContractFactory('CallbackERC20')).deploy()).target];
     await lot.arm(ex.target,ex.interface.encodeFunctionData(name,args[name]),taker.address,ex.target,true,true);
     const before=await ex.getMarket(1);const receipt=await (await ex.connect(taker).placeSell(1,122,1)).wait();
     expect(await lot.callbackResult()).to.equal(ex.interface.getError('ReentrancyGuardReentrantCall').selector);
     expect(await ex.owner()).to.equal(lot.target);expect(await ex.takerFeeBps()).to.equal(37);
-    expect(await ex.feeTreasury()).to.equal(f.treasury.address);expect(await ex.marketCount()).to.equal(2);
+    expect(await ex.exchangeActive()).to.equal(true);expect(await ex.marketCount()).to.equal(2);
     expect((await ex.orders(id)).owner).to.equal(lot.target);await reconcile(f);
   });
 });

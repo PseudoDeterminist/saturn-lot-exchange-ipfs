@@ -218,7 +218,7 @@ async function main() {
     await ethers.getContractFactory("SaturnLotExchange");
 
   const exchange =
-    await SaturnLotExchange.deploy(wetc.target);
+    await SaturnLotExchange.deploy(wetc.target, deployer.address);
 
   const deploymentReceipt = await waitForReceipt(
     exchange.deploymentTransaction(),
@@ -226,6 +226,11 @@ async function main() {
   );
 
   console.log("SaturnLotExchange:", exchange.target);
+
+  await waitForReceipt(
+    await exchange.activate(),
+    "activate SaturnLotExchange"
+  );
 
   // ------------------------------------------------------------------
   // Approve two markets

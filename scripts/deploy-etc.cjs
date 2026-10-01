@@ -43,9 +43,12 @@ async function main() {
 
   const wetcAddress = process.env.MAINNET_WETC_ADDRESS;
   const strn10kAddress = process.env.MAINNET_STRN10K_ADDRESS;
+  const daoAddress = process.env.MAINNET_DAO_ADDRESS;
 
-  if (!wetcAddress || !strn10kAddress) {
-    throw new Error("Set MAINNET_WETC_ADDRESS and MAINNET_STRN10K_ADDRESS in .env");
+  if (!wetcAddress || !strn10kAddress || !daoAddress) {
+    throw new Error(
+      "Set MAINNET_WETC_ADDRESS, MAINNET_STRN10K_ADDRESS and MAINNET_DAO_ADDRESS in .env"
+    );
   }
 
   if (wetcAddress.toLowerCase() !== "0x82a618305706b14e7bcf2592d4b9324a366b6dad") {
@@ -61,12 +64,17 @@ async function main() {
     throw new Error(`No code at MAINNET_STRN10K_ADDRESS: ${strn10kAddress}`);
   }
 
+  const daoCode = await ethers.provider.getCode(daoAddress);
+  if (!daoCode || daoCode === "0x") {
+    throw new Error(`No code at MAINNET_DAO_ADDRESS: ${daoAddress}`);
+  }
+
   const SaturnLotExchange = await ethers.getContractFactory("SaturnLotExchange");
-  const clob = await SaturnLotExchange.deploy(wetcAddress);
+  const clob = await SaturnLotExchange.deploy(wetcAddress, daoAddress);
   const receipt = await clob.deploymentTransaction().wait();
   console.log("SaturnLotExchange:", clob.target, "tx:", receipt.hash);
-
-  await (await clob.approveMarket(strn10kAddress)).wait();
+  console.log("Owner (DAO):", await clob.owner());
+  console.log("Exchange active:", await clob.exchangeActive());
 
   const addresses = {
     MAINNET_EXCHANGE_DEPLOYMENT_BLOCK: receipt.blockNumber,

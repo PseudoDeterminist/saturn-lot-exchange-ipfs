@@ -13,7 +13,7 @@ describe("CID UI price lattice", function () {
 
     // priceAtTick is pure; constructor only requires a nonzero WETC address.
     const Exchange = await ethers.getContractFactory("SaturnLotExchange");
-    const exchange = await Exchange.deploy(owner.address);
+    const exchange = await Exchange.deploy(owner.address, owner.address);
 
     const MIN = -464;
     const MAX = 1855;

@@ -20,7 +20,7 @@ async function runFok(hre, side, options = {}) {
   const abi = ['function approve(address,uint256) returns(bool)','function balanceOf(address) view returns(uint256)'];
   const quote = new ethers.Contract(await ex.WETC(), abi, signer);
   const lot = new ethers.Contract(market.lotToken, abi, signer);
-  const bps = await ex.takerFeeBps(), treasury = await ex.feeTreasury();
+  const bps = await ex.takerFeeBps(), treasury = await ex.owner();
   const boundGross = (await ex.priceAtTick(tick)) * lots;
   const boundFee = boundGross * bps / 10000n;
   const buy = side === 'buy';

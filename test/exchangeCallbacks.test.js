@@ -9,8 +9,10 @@ describe("SaturnLotExchange token callbacks", function () {
     const HookToken = await ethers.getContractFactory("ReentrantERC20");
     const lot = await HookToken.deploy("LOT", "LOT", 0, 1000);
     const Factory = await ethers.getContractFactory("SaturnLotExchange");
-    const exchange = await Factory.deploy(wetc.target);
+    const [owner] = await ethers.getSigners();
+    const exchange = await Factory.deploy(wetc.target, owner.address);
     await exchange.approveMarket(lot.target);
+    await exchange.activate();
     const Probe = await ethers.getContractFactory("ExchangeCallbackProbe");
     const probe = await Probe.deploy();
     const bidValue = await exchange.priceAtTick(120);

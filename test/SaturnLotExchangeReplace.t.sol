@@ -54,13 +54,16 @@ contract SaturnLotExchangeReplaceTest is Test {
         replaceLot2 = new ReplaceMockToken("Replace LOT2", "rLOT2");
         referenceLot2 = new ReplaceMockToken("Reference LOT2", "xLOT2");
 
-        replaceEx = new SaturnLotExchange(address(replaceWetc));
-        referenceEx = new SaturnLotExchange(address(referenceWetc));
+        replaceEx = new SaturnLotExchange(address(replaceWetc), address(this));
+        referenceEx = new SaturnLotExchange(address(referenceWetc), address(this));
 
         assertEq(replaceEx.approveMarket(address(replaceLot1)), MARKET1);
         assertEq(referenceEx.approveMarket(address(referenceLot1)), MARKET1);
         assertEq(replaceEx.approveMarket(address(replaceLot2)), MARKET2);
         assertEq(referenceEx.approveMarket(address(referenceLot2)), MARKET2);
+
+        replaceEx.activate();
+        referenceEx.activate();
 
         address[2] memory users = [alice, bob];
         for (uint256 i; i < users.length; ++i) {

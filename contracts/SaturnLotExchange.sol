@@ -34,12 +34,12 @@ contract SaturnLotExchange is ReentrancyGuard {
     IERC20 public immutable WETC; // shared quote token for every market
 
     address public owner;
+    bool public exchangeActive; // false at deployment; owner/DAO activates once accepted
 
     // Taker fees are charged only in WETC after a successful FOK.
     // Maker/order-book accounting remains gross and exact.
     uint16 public constant MAX_TAKER_FEE_BPS = 50; // governance can never exceed 0.50%
     uint16 public takerFeeBps;                     // 0 at deployment; owner/DAO may set later
-    address public feeTreasury;                    // receives WETC fees immediately after each FOK
 
     /* -------------------- Events -------------------- */
 
@@ -53,10 +53,7 @@ contract SaturnLotExchange is ReentrancyGuard {
         uint16 newFeeBps
     );
 
-    event FeeTreasuryUpdated(
-        address indexed previousTreasury,
-        address indexed newTreasury
-    );
+    event ExchangeActivated();
 
     event MarketApproved(
         uint32 indexed marketId,
@@ -208,15 +205,14 @@ contract SaturnLotExchange is ReentrancyGuard {
         hex"241524432471249f24ce24fd252c255b258b25bb25eb261b264b267c26ad26de";
 
 
-    constructor(address wetcToken) {
+    constructor(address wetcToken, address daoOwner) {
         require(wetcToken != address(0), "zero WETC");
+        require(daoOwner != address(0), "zero owner");
+
         WETC = IERC20(wetcToken);
+        owner = daoOwner;
 
-        owner = msg.sender;
-        feeTreasury = msg.sender;
-
-        emit OwnershipTransferred(address(0), msg.sender);
-        emit FeeTreasuryUpdated(address(0), msg.sender);
+        emit OwnershipTransferred(address(0), daoOwner);
     }
 
     modifier onlyOwner() {
@@ -238,6 +234,18 @@ contract SaturnLotExchange is ReentrancyGuard {
         emit OwnershipTransferred(oldOwner, newOwner);
     }
 
+    /// @notice Permanently enable trading after DAO acceptance.
+    function activate()
+        external
+        onlyOwner
+    {
+        require(!exchangeActive, "already active");
+
+        exchangeActive = true;
+
+        emit ExchangeActivated();
+    }
+
     function setTakerFeeBps(uint16 newFeeBps)
         external
         onlyOwner
@@ -248,18 +256,6 @@ contract SaturnLotExchange is ReentrancyGuard {
         takerFeeBps = newFeeBps;
 
         emit TakerFeeUpdated(oldFeeBps, newFeeBps);
-    }
-
-    function setFeeTreasury(address newTreasury)
-        external
-        onlyOwner
-    {
-        require(newTreasury != address(0), "zero treasury");
-
-        address oldTreasury = feeTreasury;
-        feeTreasury = newTreasury;
-
-        emit FeeTreasuryUpdated(oldTreasury, newTreasury);
     }
 
     /// @notice Approve a Lot Token for trading. Re-approving a retired token
@@ -1198,7 +1194,7 @@ contract SaturnLotExchange is ReentrancyGuard {
 
         if (fee != 0) {
             WETC.safeTransfer(
-                feeTreasury,
+                owner,
                 fee
             );
         }
@@ -1402,7 +1398,7 @@ contract SaturnLotExchange is ReentrancyGuard {
 
         if (fee != 0) {
             WETC.safeTransfer(
-                feeTreasury,
+                owner,
                 fee
             );
         }
@@ -1428,6 +1424,11 @@ contract SaturnLotExchange is ReentrancyGuard {
         view
         returns (Market storage mkt)
     {
+        require(
+            exchangeActive,
+            "exchange inactive"
+        );
+
         mkt = _market(marketId);
 
         require(

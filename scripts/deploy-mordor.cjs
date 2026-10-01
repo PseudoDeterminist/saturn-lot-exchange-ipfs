@@ -130,19 +130,26 @@ async function main() {
     console.log("STRN10K:", strn10k.target);
   }
 
+  const daoAddress = process.env.MORDOR_DAO_ADDRESS;
+  if (!daoAddress) {
+    throw new Error("Set MORDOR_DAO_ADDRESS in .env");
+  }
+
+  const daoCode = await ethers.provider.getCode(daoAddress);
+  if (!daoCode || daoCode === "0x") {
+    throw new Error(`No code at MORDOR_DAO_ADDRESS: ${daoAddress}`);
+  }
+
   const SaturnLotExchange = await ethers.getContractFactory("SaturnLotExchange");
-  const clob = await SaturnLotExchange.deploy(wetc.target);
+  const clob = await SaturnLotExchange.deploy(wetc.target, daoAddress);
   const deploymentReceipt = await waitForReceipt(clob.deploymentTransaction(), "SaturnLotExchange deploy");
   console.log("SaturnLotExchange:", clob.target);
-
-  await waitForReceipt(await clob.approveMarket(strn10k.target), "approve market");
-  const marketId = await clob.marketIdOf(strn10k.target);
-  await seedOrders(clob, wetc, strn10k, waitForReceipt);
-  console.log("Seeded initial book orders.");
+  console.log("Owner (DAO):", await clob.owner());
+  console.log("Exchange active:", await clob.exchangeActive());
 
   const addresses = {
     MORDOR_EXCHANGE_DEPLOYMENT_BLOCK: deploymentReceipt.blockNumber,
-    MORDOR_STRN10K_MARKET_ID: marketId.toString(),
+    MORDOR_STRN10K_MARKET_ID: "0",
     MORDOR_WETC_ADDRESS: wetc.target,
     MORDOR_STRN10K_ADDRESS: strn10k.target,
     MORDOR_SATURN_LOT_EXCHANGE_ADDRESS: clob.target

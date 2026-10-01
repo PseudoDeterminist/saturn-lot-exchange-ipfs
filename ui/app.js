@@ -35,7 +35,6 @@ const ABI = [
   "function placeSell(uint32 marketId,int256 tick,uint256 lots) returns (uint64)",
 
   "function takerFeeBps() view returns (uint16)",
-  "function feeTreasury() view returns (address)",
 ];
 
 const ERC20_ABI = [
